@@ -167,7 +167,7 @@ async function openProject(pid) {
 async function refreshProject() {
   if (!S.project) return;
   S.project = await api('/api/projects/' + S.project.id);
-  render();
+  render(true);
 }
 function throttledRefresh() {
   clearTimeout(S.fetchTimer);
@@ -175,10 +175,17 @@ function throttledRefresh() {
 }
 function watch(pid) {
   if (S.sse) { S.sse.close(); S.sse = null; }
-  clearInterval(S.pollTimer);
+  clearInterval(S.pollTimer); S.pollTimer = null;
   const es = new EventSource(`/api/projects/${pid}/events`);
-  es.onmessage = throttledRefresh;
-  es.onerror = () => { if (!S.pollTimer) S.pollTimer = setInterval(() => S.project && refreshProject(), 4000); };
+  es.onopen = () => {
+    clearInterval(S.pollTimer); S.pollTimer = null;
+    const c = document.getElementById('fw-conn'); if (c) c.hidden = true;
+  };
+  es.onmessage = () => throttledRefresh();
+  es.onerror = () => {
+    const c = document.getElementById('fw-conn'); if (c) c.hidden = false; /* 工具条亮「重连中…」 */
+    if (!S.pollTimer) S.pollTimer = setInterval(() => S.project && refreshProject(), 4000);
+  };
   S.sse = es;
 }
 
@@ -312,10 +319,40 @@ function readDraft() {
   });
   return items;
 }
-function render() {
+function render(light) {
   document.title = S.view === 'project' && S.project ? `${S.project.title} · 漫剧工坊` : '漫剧工坊 · Manju Studio';
-  if (S.view === 'home') renderHome();
-  else renderProject();
+  document.body.classList.toggle('flow-mode', S.view === 'project');
+  if (S.view === 'home') return renderHome();
+  if (!light || !S._graph) return renderProject(); /* 首次/换项目/换层级仍走全量 */
+  renderLight();
+}
+
+/* SSE 高频路径:补丁画布 + 刷工具条 + 跟随宿主,不重建壳 */
+function renderLight() {
+  const p = S.project;
+  S._ns = nextStepOf(p);
+  updateToolbar();
+  try {
+    S._graph = buildGraph(p, S.settings, S.flow.view);
+    Flow.patch(S._graph);
+  } catch (e) {
+    console.error('buildGraph failed', e);
+    toast('画布构图异常:' + e.message + ',可点工具条 🧹 重置布局', 'err');
+    return;
+  }
+  const drawer = document.getElementById('fw-drawer');
+  const editing = drawer && drawer.contains(document.activeElement) &&
+    document.activeElement.matches('input, textarea, select');
+  if (S.flow.sel) {
+    const n = (S._graph.nodes || []).find(x => x.id === S.flow.sel);
+    if (n) { if (!editing) flowPanelFor(n); }
+    else { /* 选中节点已被删除:收面板并清 URL 参数 */
+      FlowUI.closePanel(); Flow.select(null);
+      S.flow.sel = '';
+      history.replaceState({}, '', flowUrl({ sel: '' }));
+    }
+  }
+  syncHosts(true);
 }
 
 function renderHome() {
@@ -460,9 +497,15 @@ function rebuildGraph(fit) {
 }
 
 /* URL 里的 overlay/drawer 落到宿主(Task 9 精修脉络浮层) */
-function syncHosts() {
-  if (S.flow.overlay === 'story') FlowUI.openOverlay('🧭 脉络工作室', renderStory());
-  else FlowUI.closeOverlay();
+function syncHosts(light) {
+  const ov = document.getElementById('fw-overlay');
+  const ovOpen = !!(ov && ov.classList.contains('open'));
+  if (S.flow.overlay === 'story') {
+    /* 浮层内正在输入时跳过重填,防丢字 */
+    const typing = ovOpen && ov.contains(document.activeElement) &&
+      document.activeElement.matches('input, textarea');
+    if (!light || !ovOpen || !typing) FlowUI.openOverlay('🧭 脉络工作室', renderStory());
+  } else if (ovOpen) FlowUI.closeOverlay();
   if (S.flow.drawer === 'logs') FlowUI.openLogs(logsHtml());
 }
 
@@ -859,12 +902,12 @@ document.addEventListener('click', async e => {
       const ns = S._ns; if (!ns) return;
       if (ns.gen) { await api(`/api/projects/${S.project.id}/generate/${ns.gen.stage}`, 'POST', ns.gen.body || {}); toast(`已排队:${ns.gen.stage}`, 'ok'); throttledRefresh(); }
       else ns.go();
-    } else if (act === 'sel-arc') { S.selArc = el.dataset.arc; render();
+    } else if (act === 'sel-arc') { S.selArc = el.dataset.arc; render(true);
     } else if (act === 'save-story') {
       S.project = await api('/api/projects/' + S.project.id, 'PUT', {
         story: { premise: $('#story-premise').value, direction: $('#story-direction').value }, label: '编辑',
       });
-      toast('故事走向已保存', 'ok'); render();
+      toast('故事走向已保存', 'ok'); render(true);
     } else if (act === 'draft-premise') {
       if (!S.project.script) return toast('请先在「剧本」tab 写一段创意,AI 才有原料', 'err');
       const req = { kind: 'premise', idea: S.project.script, count: 1 };
@@ -979,7 +1022,7 @@ document.addEventListener('click', async e => {
       void 0;
       const t = scenes.find(s => s.id === el.dataset.sceneId);
       S.project = await api('/api/projects/' + S.project.id, 'PUT', { scenes });
-      toast(t.locked ? '🔒 场景分镜已锁定,批量视频已解锁' : '已解锁该场景', 'ok'); render();
+      toast(t.locked ? '🔒 场景分镜已锁定,批量视频已解锁' : '已解锁该场景', 'ok'); render(true);
     } else if (act === 'rename-project') {
       const name = prompt('重命名项目:', S.project.title);
       if (name && name.trim()) { S.project = await api('/api/projects/' + S.project.id, 'PUT', { title: name.trim() }); render(); }
@@ -1003,9 +1046,9 @@ document.addEventListener('click', async e => {
     } else if (act === 'stop') { await api(`/api/projects/${S.project.id}/stop`, 'POST', {}); toast('将在当前镜头完成后停止'); }
     else if (act === 'preview') lightbox(el.dataset.kind, el.dataset.url);
     else if (act === 'flow-logs') { FlowUI.openLogs(logsHtml()); }
-    else if (act === 'flow-close-panel') { FlowUI.closePanel(); history.replaceState({}, '', flowUrl({ sel: '' })); }
-    else if (act === 'flow-close-overlay') { FlowUI.closeOverlay(); history.replaceState({}, '', flowUrl({ overlay: '' })); }
-    else if (act === 'flow-close-logs') { FlowUI.closeLogs(); history.replaceState({}, '', flowUrl({ drawer: '' })); }
+    else if (act === 'flow-close-panel') { FlowUI.closePanel(); S.flow.sel = ''; history.replaceState({}, '', flowUrl({ sel: '' })); }
+    else if (act === 'flow-close-overlay') { FlowUI.closeOverlay(); S.flow.overlay = ''; history.replaceState({}, '', flowUrl({ overlay: '' })); }
+    else if (act === 'flow-close-logs') { FlowUI.closeLogs(); S.flow.drawer = ''; history.replaceState({}, '', flowUrl({ drawer: '' })); }
     else if (act === 'flow-fullscreen') { FlowUI.toggleFullscreen(); }
     else if (act === 'flow-reset-layout') { Flow.resetLayout(); toast('画布布局已重置', 'ok'); }
     else if (act === 'flow-open-story') { flowNav({ overlay: 'story' }); }
@@ -1059,9 +1102,11 @@ document.addEventListener('change', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     closeModal(); closePalette();
-    if (S.view === 'project' && S.flow && FlowUI.closeTop()) {
-      history.replaceState({}, '', flowUrl({ sel: '', overlay: '', drawer: '' }));
-    }
+    const closedHost = S.view === 'project' && S.flow ? FlowUI.closeTop() : null;
+    if (closedHost === 'panel') S.flow.sel = '';
+    else if (closedHost === 'overlay') S.flow.overlay = '';
+    else if (closedHost === 'logs') S.flow.drawer = '';
+    if (closedHost) history.replaceState({}, '', flowUrl({}));
     return;
   }
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {

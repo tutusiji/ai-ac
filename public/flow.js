@@ -338,10 +338,10 @@ const FlowUI = {
   closeLogs() { const l = document.getElementById("fw-logs"); if (l) l.classList.remove("open"); },
   closeTop() {
     const ov = document.getElementById("fw-overlay"), d = document.getElementById("fw-drawer"), l = document.getElementById("fw-logs");
-    if (ov && ov.classList.contains("open")) { FlowUI.closeOverlay(); return true; }
-    if (d && d.classList.contains("open")) { FlowUI.closePanel(); return true; }
-    if (l && l.classList.contains("open")) { FlowUI.closeLogs(); return true; }
-    return false;
+    if (ov && ov.classList.contains("open")) { FlowUI.closeOverlay(); return "overlay"; }
+    if (d && d.classList.contains("open")) { FlowUI.closePanel(); return "panel"; }
+    if (l && l.classList.contains("open")) { FlowUI.closeLogs(); return "logs"; }
+    return null;
   },
   async toggleFullscreen() {
     try {
