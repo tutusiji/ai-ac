@@ -61,6 +61,12 @@ async function handleRoute() {
   if (S.project && S.project.id === pid) { S.view = 'project'; render(); return; }
   try {
     await openProject(pid);
+    const bare = !(S.project.shots || []).length && !((S.project.story || {}).arcs || []).length;
+    if (!location.search && bare) { /* 反抽卡:全新项目直接进脉络工作室 */
+      history.replaceState({}, '', flowUrl({ overlay: 'story' }));
+      applyFlowQuery(new URL(location.href));
+      syncHosts();
+    }
   } catch (e) {
     toast('项目不存在或已删除,回到首页', 'err');
     history.replaceState({}, '', '/');
@@ -284,7 +290,7 @@ function renderStory() {
     </div>
     <div class="form-row">
       <button class="btn" data-act="save-story">保存走向</button>
-      <button class="btn primary" data-act="draft-premise">🪄 AI 起草故事骨架${p.script ? '(基于剧本创意)' : '(先在「剧本」tab 写创意)'}</button>
+      <button class="btn primary" data-act="draft-premise">🪄 AI 起草故事骨架${p.script ? '(基于剧本创意)' : '(先写创意:总览「创意」节点)'}</button>
       <span class="hint">AI 只产草稿 → 你改 → 点「采纳」才写入,不会自动生成任何画面</span>
     </div>
   </div>
@@ -909,7 +915,7 @@ document.addEventListener('click', async e => {
       });
       toast('故事走向已保存', 'ok'); render(true);
     } else if (act === 'draft-premise') {
-      if (!S.project.script) return toast('请先在「剧本」tab 写一段创意,AI 才有原料', 'err');
+      if (!S.project.script) return toast('请先写故事创意:打开总览「创意」节点面板', 'err');
       const req = { kind: 'premise', idea: S.project.script, count: 1 };
       toast('AI 正在起草故事骨架…');
       const data = await api('/api/ai/draft', 'POST', req);
