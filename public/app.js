@@ -2,7 +2,7 @@
 /* 漫剧工坊 前端 SPA(零依赖) */
 
 const S = {
-  view: 'home', projects: [], project: null, tab: 'shots', sceneId: '',
+  view: 'home', projects: [], project: null, sceneId: '',
   settings: null, catalog: null, voices: {}, styles: [], prices: null, health: null,
   sse: null, pollTimer: null, fetchTimer: null,
 };
@@ -347,13 +347,6 @@ function renderHome() {
 }
 
 /* ---------- 渲染:项目 ---------- */
-function stepChip(stage, label, n, project) {
-  const done = n && /^(\d+\/\d+)$/.test(n) && n.split('/')[0] === n.split('/')[1];
-  const active = project.running === stage;
-  return `<div class="step ${done ? 'done' : ''} ${active ? 'active' : ''}" data-act="gen" data-stage="${stage}" title="点击执行该阶段">
-    <span class="num">${done ? '✓' : active ? '⏳' : ''}</span>${label}<span class="n">${n || ''}</span></div>`;
-}
-
 function nextStepOf(p) {
   const shots = p.shots || [], scenes = p.scenes || [], chars = p.characters || [];
   const story = p.story || {};
@@ -435,6 +428,21 @@ function mountFlow() {
   rebuildGraph(true);
 }
 
+/* 节点交互:单击选中开面板;双击 story→脉络浮层、scene→镜头图,其余与单击相同 */
+function onNodeSelect(id) {
+  const n = (S._graph.nodes || []).find(x => x.id === id);
+  if (!n) return; /* 未知 id(如已删除的镜头)静默忽略 */
+  S.flow.sel = id;
+  history.replaceState({}, '', flowUrl({ sel: id }));
+  flowPanelFor(n);
+}
+
+function onNodeOpen(id) {
+  if (id === 'story') { flowNav({ overlay: 'story' }); return; }
+  if (id.startsWith('scene:')) { flowNav({ view: 'shots', scene: id.slice(6) }); return; }
+  onNodeSelect(id);
+}
+
 function rebuildGraph(fit) {
   try {
     S._graph = buildGraph(S.project, S.settings, S.flow.view);
@@ -458,93 +466,172 @@ function syncHosts() {
   if (S.flow.drawer === 'logs') FlowUI.openLogs(logsHtml());
 }
 
+function shotPanel(n) {
+  const p = S.project;
+  const sh = (p.shots || []).find(s => s.idx === n.idx && s.sceneId === n.sceneId);
+  const sc = (p.scenes || []).find(s => s.id === n.sceneId);
+  const siblings = (p.shots || []).filter(s => s.sceneId === n.sceneId).map(s => s.idx).sort((a, b) => a - b);
+  const i = siblings.indexOf(n.idx);
+  const prev = siblings[i - 1], next = siblings[i + 1];
+  return `<div class="hint" style="margin-bottom:10px">场景:${esc(sc ? sc.title : n.sceneId)}${sc && sc.locked ? ' 🔒' : ''}</div>
+    ${sh ? renderShotCard(sh) : '<div class="empty">该镜头不存在(可能已被删除)</div>'}
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      ${prev ? `<button class="btn small" data-act="flow-sel-shot" data-scene-id="${n.sceneId}" data-idx="${prev}">← 第 ${prev} 镜</button>` : '<span></span>'}
+      <span style="flex:1"></span>
+      ${next ? `<button class="btn small" data-act="flow-sel-shot" data-scene-id="${n.sceneId}" data-idx="${next}">第 ${next} 镜 →</button>` : ''}
+    </div>`;
+}
+
+function scenePanel(n) {
+  const p = S.project;
+  const sc = (p.scenes || []).find(s => s.id === n.sceneId);
+  if (!sc) return '<div class="empty">场景不存在</div>';
+  const list = (p.shots || []).filter(s => s.sceneId === sc.id).sort((a, b) => a.idx - b.idx);
+  return `<div class="panel-card">
+      <div class="form-row"><span>场景名</span><input type="text" data-change="scene" data-id="${sc.id}" data-field="title" value="${esc(sc.title)}"></div>
+      <div class="form-row"><span>地点 / 时间</span>
+        <input type="text" data-change="scene" data-id="${sc.id}" data-field="location" value="${esc(sc.location || '')}" placeholder="地点" style="flex:1">
+        <input type="text" data-change="scene" data-id="${sc.id}" data-field="time" value="${esc(sc.time || '')}" placeholder="时间" style="flex:1"></div>
+      <div class="form-row"><span>出场角色</span><input type="text" data-change="scene" data-id="${sc.id}" data-field="cast" value="${esc((sc.cast || []).join(','))}" placeholder="逗号分隔"></div>
+      <div style="margin-top:8px"><textarea data-change="scene" data-id="${sc.id}" data-field="description" rows="3" placeholder="场景内容(要能被画出来)">${esc(sc.description || '')}</textarea></div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn small ${sc.locked ? '' : 'primary'}" data-act="toggle-lock" data-scene-id="${sc.id}">${sc.locked ? '🔒 已锁定(点按解锁)' : '🔒 锁定分镜(解锁批量视频)'}</button>
+        <button class="btn small" data-act="gen" data-stage="sceneShots" data-scene-id="${sc.id}">🪄 AI 生成本场景分镜</button>
+      </div>
+    </div>
+    ${list.length
+      ? `<div class="shots-grid" style="margin-top:12px">${list.map(renderShotCard).join('')}</div>`
+      : '<div class="empty" style="margin-top:12px">该场景还没有分镜,点上面「AI 生成本场景分镜」。</div>'}`;
+}
+
+function storyPanel() {
+  const p = S.project;
+  const scenes = p.scenes || [];
+  return `<div class="panel-card"><h3>脉络进度</h3>
+    ${scenes.length ? scenes.map(sc => {
+      const st = sc.stats || {};
+      const has = (st.shots || 0) > 0;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+        <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sc.title)}${sc.locked ? ' 🔒' : ''}</b>
+        <span class="hint">${has ? `分镜${st.shots} · 图${st.panels || 0}/${st.shots} · 片${st.clips || 0}/${st.shots}` : '未展开'}</span>
+        ${has ? `<button class="btn small" data-act="goto-scene" data-scene-id="${sc.id}">查看镜头 ›</button>`
+              : `<button class="btn small" data-act="gen" data-stage="sceneShots" data-scene-id="${sc.id}">🪄 生成分镜</button>`}
+      </div>`;
+    }).join('') : '<div class="empty">还没有场景:先打开脉络工作室,把节拍拆成场景。</div>'}
+    <div style="margin-top:12px"><button class="btn primary" data-act="flow-open-story">🧭 打开脉络工作室</button></div>
+  </div>`;
+}
+
+function panelsPanel() {
+  const p = S.project;
+  return `<div class="panel-card"><h3>分镜图进度(按场景)</h3>
+    ${(p.scenes || []).map(sc => {
+      const st = sc.stats || {};
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+        <b style="flex:1">${esc(sc.title)}</b>
+        <span class="hint">图 ${st.panels || 0}/${st.shots || 0}</span>
+        <button class="btn small" data-act="goto-scene" data-scene-id="${sc.id}">去镜头 ›</button>
+      </div>`;
+    }).join('') || '<div class="empty">还没有场景</div>'}
+    <div class="hint" style="margin-top:10px">镜头图逐镜生成:双击「脉络」节点进入镜头图;镜头卡 pip 悬停可 ↻ 单镜重roll。</div></div>`;
+}
+
+function clipsPanel() {
+  const p = S.project;
+  const animatic = S.settings.videoEngine === 'animatic';
+  return `<div class="panel-card"><h3>视频片段(锁定闸门)</h3>
+    <div class="hint">${animatic
+      ? '当前为动态漫模式:ffmpeg 直绘运镜,0 成本,无需锁定即可参与合成。'
+      : '未 🔒 锁定的场景,批量生成视频会被服务端直接拒绝;单镜重roll不受限。'}</div>
+    ${(p.scenes || []).map(sc => {
+      const st = sc.stats || {};
+      const pending = (st.shots || 0) - (st.clips || 0);
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+        <b style="flex:1">${esc(sc.title)} ${sc.locked ? '🔒' : '🔓'}</b>
+        <span class="hint">片 ${st.clips || 0}/${st.shots || 0}</span>
+        ${sc.locked && pending > 0 && !animatic ? `<button class="btn small" data-act="gen" data-stage="clips" data-scene-id="${sc.id}">🎬 生成 ${pending} 镜视频</button>` : ''}
+      </div>`;
+    }).join('') || '<div class="empty">还没有场景</div>'}
+    <div class="hint" style="margin-top:10px">批量只处理「已锁定且分镜图完成」的镜头;Ctrl+K 里也有全项目批量入口。</div></div>`;
+}
+
+function voicePanel() {
+  const p = S.project;
+  const withDlg = (p.shots || []).filter(s => (s.dialogue || '').trim());
+  return `<div class="panel-card"><h3>配音(edge-tts,¥0)</h3>
+    <div class="hint">台词按说话人自动分配音色;台词/音色未变化时自动跳过(hash 缓存),重复点不重复合成。「(内心)」开头为内心独白。</div>
+    <div style="margin-top:10px"><button class="btn primary" data-act="gen" data-stage="voice">🔊 为全部台词配音</button></div>
+    ${withDlg.map(sh => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">第 ${sh.idx} 镜 · ${esc(sh.speaker || '旁白')}:${esc((sh.dialogue || '').slice(0, 24))}</span>
+      <span class="badge ${sh.voiceStatus === 'done' ? 'done' : sh.voiceStatus === 'error' ? 'error' : sh.voiceStatus === 'pending' ? 'pending' : ''}">${sh.voiceStatus === 'done' ? '✓' : sh.voiceStatus === 'skipped' ? '跳过' : sh.voiceStatus === 'error' ? '失败' : sh.voiceStatus === 'pending' ? '生成中' : '待生成'}</span>
+      ${sh.audioUrl ? `<button class="btn small" data-act="preview" data-kind="video" data-url="${sh.audioUrl}">试听</button>` : ''}
+      <button class="btn small" data-act="gen" data-stage="voice" data-shot-idx="${sh.idx}" title="重新配音">↻</button>
+    </div>`).join('') || '<div class="empty">还没有台词:先到镜头面板写台词。</div>'}
+  </div>`;
+}
+
+function coverPanel() {
+  const p = S.project;
+  return p.coverImageUrl
+    ? `<div class="panel-card">
+        <img src="${p.coverImageUrl}" style="width:100%;border-radius:12px" data-act="preview" data-kind="img" data-url="${p.coverImageUrl}">
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+          <a class="btn small" style="text-decoration:none" href="${p.coverImageUrl}" download="cover.jpg">⬇ 下载封面</a>
+          <button class="btn small" data-act="gen" data-stage="cover">🎨 重新生成</button>
+        </div>
+        <div class="hint" style="margin-top:8px">1080×1440 竖版海报:故事核心冲突 + 最多 2 张角色设定图参考 + 剧集名艺术字(套餐生图,≈¥0.2)。</div>
+      </div>`
+    : `<div class="panel-card" style="text-align:center;padding:40px 0">
+        🎨<br>还没有封面<br>
+        <button class="btn primary" data-act="gen" data-stage="cover">生成封面</button>
+        <div class="hint" style="margin-top:8px">1080×1440 竖版海报,首页卡片与成片页下载都会用到,可随时重roll。</div>
+      </div>`;
+}
+
 function flowPanelFor(n) {
   if (n.id === 'idea') return FlowUI.openPanel(n, renderScript());
   if (n.id === 'chars') return FlowUI.openPanel(n, renderChars());
   if (n.id === 'film') return FlowUI.openPanel(n, renderFilm());
-  /* 其余节点:Task 7 提供专用面板;此兜底展示节点摘要,操作走节点按钮 / Ctrl+K */
-  return FlowUI.openPanel(n, `<div class="panel-card"><h3>${esc((n.icon || '') + ' ' + n.title)}</h3>
-    <div class="hint">${esc(n.sub || n.desc || '')}</div>
-    <div class="note" style="margin-top:10px;color:var(--dim);font-size:12.5px">操作入口:节点卡上的按钮,或 Ctrl+K 命令面板。</div></div>`);
+  if (n.id === 'story') return FlowUI.openPanel(n, storyPanel());
+  if (n.id === 'panels') return FlowUI.openPanel(n, panelsPanel());
+  if (n.id === 'clips') return FlowUI.openPanel(n, clipsPanel());
+  if (n.id === 'voice') return FlowUI.openPanel(n, voicePanel());
+  if (n.id === 'cover') return FlowUI.openPanel(n, coverPanel());
+  if (n.kind === 'scene') return FlowUI.openPanel(n, scenePanel(n));
+  if (n.kind === 'shot') return FlowUI.openPanel(n, shotPanel(n));
 }
 
-function onNodeSelect(id) {
-  if (!id) {
-    FlowUI.closePanel();
-    history.replaceState({}, '', flowUrl({ sel: '' }));
-    return;
-  }
-  const n = (S._graph.nodes || []).find(x => x.id === id);
-  if (!n) return; /* URL 带了已失效的 sel:静默忽略 */
-  Flow.select(id);
-  flowPanelFor(n);
-  history.replaceState({}, '', flowUrl({ sel: id }));
-}
-
-function onNodeOpen(id) { /* 双击 */
-  if (id === 'story') { flowNav({ view: S.flow.view === 'overview' ? 'shots' : 'overview' }); return; }
-  if (id.startsWith('scene:')) { flowNav({ view: 'shots', scene: id.slice(6) }); return; }
-}
-
-function renderShots() {
-  const p = S.project;
-  const scenes = p.scenes || [];
-  if (!scenes.length) {
-    return `<div class="empty">还没有场景。<br>到「脉络」tab 用 AI 把节拍拆成场景,再回到这里逐场景生成分镜。<br>
-      <button class="btn primary" data-act="tab" data-tab="story">去脉络工作室</button></div>`;
-  }
-  if (!S.sceneId || !scenes.some(s => s.id === S.sceneId)) S.sceneId = scenes[0].id;
-  const cur = scenes.find(s => s.id === S.sceneId);
-  const list = p.shots.filter(s => s.sceneId === S.sceneId);
-  const cards = list.map(sh => {
-    const badge = (st, doneTxt) => `<span class="badge ${st}">${st === 'done' ? doneTxt : st === 'pending' ? '生成中…' : st === 'error' ? '失败' : st === 'animatic' ? '动态漫' : '未生成'}</span>`;
-    const media = sh.clipUrl
-      ? `<video src="${sh.clipUrl}" preload="metadata" data-act="preview" data-kind="video" data-url="${sh.clipUrl}"></video>`
-      : sh.panelUrl
-        ? `<img src="${sh.panelUrl}" loading="lazy" data-act="preview" data-kind="img" data-url="${sh.panelUrl}">`
-        : `<div class="ph">🖼️<br><span style="font-size:12px">暂无分镜图</span></div>`;
-    return `<div class="shot">
-      <div class="visual-box">${media}
-        <span class="badge ${sh.clipStatus === 'done' ? 'done' : sh.clipStatus === 'animatic' ? 'done' : sh.panelStatus === 'error' || sh.clipStatus === 'error' ? 'error' : sh.panelStatus === 'pending' || sh.clipStatus === 'pending' ? 'pending' : ''}">
-          ${sh.clipStatus === 'done' ? '视频 ✓' : sh.clipStatus === 'animatic' ? '动态漫 ✓' : sh.clipStatus === 'error' ? '视频失败' : sh.panelStatus === 'done' ? '分镜图 ✓' : sh.panelStatus === 'error' ? '图失败' : sh.panelStatus === 'pending' || sh.clipStatus === 'pending' ? '生成中…' : '待生成'}</span>
-        <span class="shot-no">第 ${sh.idx} 镜</span>
+function renderShotCard(sh) {
+  const badge = (st, doneTxt) => `<span class="badge ${st}">${st === 'done' ? doneTxt : st === 'pending' ? '生成中…' : st === 'error' ? '失败' : st === 'animatic' ? '动态漫' : '未生成'}</span>`;
+  const media = sh.clipUrl
+    ? `<video src="${sh.clipUrl}" preload="metadata" data-act="preview" data-kind="video" data-url="${sh.clipUrl}"></video>`
+    : sh.panelUrl
+      ? `<img src="${sh.panelUrl}" loading="lazy" data-act="preview" data-kind="img" data-url="${sh.panelUrl}">`
+      : `<div class="ph">🖼️<br><span style="font-size:12px">暂无分镜图</span></div>`;
+  return `<div class="shot">
+    <div class="visual-box">${media}
+      <span class="badge ${sh.clipStatus === 'done' ? 'done' : sh.clipStatus === 'animatic' ? 'done' : sh.panelStatus === 'error' || sh.clipStatus === 'error' ? 'error' : sh.panelStatus === 'pending' || sh.clipStatus === 'pending' ? 'pending' : ''}">
+        ${sh.clipStatus === 'done' ? '视频 ✓' : sh.clipStatus === 'animatic' ? '动态漫 ✓' : sh.clipStatus === 'error' ? '视频失败' : sh.panelStatus === 'done' ? '分镜图 ✓' : sh.panelStatus === 'error' ? '图失败' : sh.panelStatus === 'pending' || sh.clipStatus === 'pending' ? '生成中…' : '待生成'}</span>
+      <span class="shot-no">第 ${sh.idx} 镜</span>
+    </div>
+    <div class="body">
+      <div class="row1">
+        <span class="tag">🎬 ${esc(sh.scene || '—')}</span>
+        <span class="tag">📷 ${esc(sh.camera || '固定')}</span>
+        <span class="tag">${sh.duration || 5}s</span>
+        ${sh.audioUrl ? `<span class="tag" style="color:var(--ok)">🔊 ${esc(sh.speaker || '')}</span>` : sh.dialogue ? `<span class="tag">🗣 ${esc(sh.speaker || '旁白')}</span>` : ''}
       </div>
-      <div class="body">
-        <div class="row1">
-          <span class="tag">🎬 ${esc(sh.scene || '—')}</span>
-          <span class="tag">📷 ${esc(sh.camera || '固定')}</span>
-          <span class="tag">${sh.duration || 5}s</span>
-          ${sh.audioUrl ? `<span class="tag" style="color:var(--ok)">🔊 ${sh.speaker}</span>` : sh.dialogue ? `<span class="tag">🗣 ${esc(sh.speaker || '旁白')}</span>` : ''}
-        </div>
-        <textarea class="visual" data-change="shot" data-idx="${sh.idx}" data-field="visual" rows="2">${esc(sh.visual)}</textarea>
-        <textarea class="dlg" data-change="shot" data-idx="${sh.idx}" data-field="dialogue" rows="1" placeholder="台词(可空)">${esc(sh.dialogue || '')}</textarea>
-        ${sh.error ? `<div class="err">${esc(sh.error)}</div>` : ''}
-        <div class="ops">
-          <button class="btn small" data-act="gen" data-stage="panels" data-shot-idx="${sh.idx}">🎨 ${sh.panelStatus === 'done' ? '重绘' : '生成图'}</button>
-          ${S.settings.videoEngine === 'animatic' ? '' : `<button class="btn small" data-act="gen" data-stage="clips" data-shot-idx="${sh.idx}" ${sh.panelStatus !== 'done' ? 'disabled title="先有分镜图"' : ''}>🎬 ${sh.clipStatus === 'done' ? '重做视频' : '生成视频'}</button>`}
-          ${sh.audioUrl ? `<button class="btn small" data-act="preview" data-kind="video" data-url="${sh.audioUrl}">🔊 试听</button>` : ''}
-          ${sh.dialogue ? `<button class="btn small" data-act="gen" data-stage="voice" data-shot-idx="${sh.idx}">🎙 配音</button>` : ''}
-        </div>
+      <textarea class="visual" data-change="shot" data-idx="${sh.idx}" data-field="visual" rows="2">${esc(sh.visual)}</textarea>
+      <textarea class="dlg" data-change="shot" data-idx="${sh.idx}" data-field="dialogue" rows="1" placeholder="台词(可空)">${esc(sh.dialogue || '')}</textarea>
+      ${sh.error ? `<div class="err">${esc(sh.error)}</div>` : ''}
+      <div class="ops">
+        <button class="btn small" data-act="gen" data-stage="panels" data-shot-idx="${sh.idx}">🎨 ${sh.panelStatus === 'done' ? '重绘' : '生成图'}</button>
+        ${S.settings.videoEngine === 'animatic' ? '' : `<button class="btn small" data-act="gen" data-stage="clips" data-shot-idx="${sh.idx}" ${sh.panelStatus !== 'done' ? 'disabled title="先有分镜图"' : ''}>🎬 ${sh.clipStatus === 'done' ? '重做视频' : '生成视频'}</button>`}
+        ${sh.audioUrl ? `<button class="btn small" data-act="preview" data-kind="video" data-url="${sh.audioUrl}">🔊 试听</button>` : ''}
+        ${sh.dialogue ? `<button class="btn small" data-act="gen" data-stage="voice" data-shot-idx="${sh.idx}">🎙 配音</button>` : ''}
       </div>
-    </div>`;
-  }).join('');
-  const sceneBar = `
-  <div class="scene-bar">
-    <select data-change="scene-select">
-      ${scenes.map(s => `<option value="${s.id}" ${s.id === S.sceneId ? 'selected' : ''}>${esc(s.title)}${s.locked ? ' 🔒' : ''}</option>`).join('')}
-      <option value="__all__" ${S.sceneId === '__all__' ? 'selected' : ''}>全部场景(${p.shots.length} 镜)</option>
-    </select>
-    ${cur ? `<span class="scene-desc" title="${esc(cur.description)}">${esc(cur.description || '')}</span>` : '<span class="scene-desc">全部场景的镜头</span>'}
-    <div class="spacer"></div>
-    ${cur ? `<button class="btn small ${cur.locked ? '' : 'primary'}" data-act="toggle-lock" data-scene-id="${cur.id}">${cur.locked ? '🔒 已锁定(点按解锁)' : '🔒 锁定分镜(解锁批量视频)'}</button>
-    <button class="btn small" data-act="gen" data-stage="sceneShots" data-scene-id="${cur.id}">🪄 AI 生成本场景分镜(纯文本)</button>` : ''}
+    </div>
   </div>`;
-  if (!list.length && S.sceneId !== '__all__') {
-    return sceneBar + `<div class="empty">场景「${esc(cur.title)}」还没有分镜。<br>
-      <button class="btn primary" data-act="gen" data-stage="sceneShots" data-scene-id="${cur.id}">🪄 AI 生成本场景分镜(纯文本,免费)</button>
-      <div class="hint">会基于故事走向/章节/节拍上下文产出 4-8 镜,生成后可逐镜改台词与画面描述</div></div>`;
-  }
-  return sceneBar + `<div class="shots-grid">${cards}</div>`;
 }
 
 function renderChars() {
@@ -921,6 +1008,11 @@ document.addEventListener('click', async e => {
     else if (act === 'flow-close-logs') { FlowUI.closeLogs(); history.replaceState({}, '', flowUrl({ drawer: '' })); }
     else if (act === 'flow-fullscreen') { FlowUI.toggleFullscreen(); }
     else if (act === 'flow-reset-layout') { Flow.resetLayout(); toast('画布布局已重置', 'ok'); }
+    else if (act === 'flow-open-story') { flowNav({ overlay: 'story' }); }
+    else if (act === 'flow-sel-shot') {
+      const nid = 'shot:' + (el.dataset.sceneId || S.flow.scene) + ':' + Number(el.dataset.idx);
+      if ((S._graph.nodes || []).some(x => x.id === nid)) onNodeSelect(nid);
+    }
   } catch (err) {
     toast(err.message + (err.hint ? ' — ' + err.hint : ''), 'err');
   }
@@ -930,11 +1022,6 @@ document.addEventListener('change', e => {
   const el = e.target.closest('[data-change]');
   if (!el || !S.project) return;
   const kind = el.dataset.change;
-  if (kind === 'scene-select') {
-    S.sceneId = el.value === '__all__' ? '__all__' : el.value;
-    history.replaceState({}, '', flowUrl({ view: 'shots' }));
-    render(); return;
-  }
   const send = async (body) => {
     body.label = body.label || '编辑';
     try { S.project = await api('/api/projects/' + S.project.id, 'PUT', body); }
@@ -1003,6 +1090,11 @@ function paletteItems() {
     items.push({ label: S.flow.view === 'overview' ? '🖼 切换到镜头图' : '🗺 切换到总览', hint: '1/2',
       run: () => flowNav({ view: S.flow.view === 'overview' ? 'shots' : 'overview' }) });
     items.push({ label: '🧹 重置画布布局', run: () => { Flow.resetLayout(); toast('画布布局已重置', 'ok'); } });
+    items.push({ label: '🪄 AI 生成本场景分镜', run: () => {
+      const sid = S.flow.scene || (((S.project.scenes || []).find(sc => !(S.project.shots || []).some(x => x.sceneId === sc.id)) || {}).id);
+      if (!sid) return toast('没有待展开的场景', 'err');
+      api(`/api/projects/${S.project.id}/generate/sceneShots`, 'POST', { sceneId: sid }).then(() => { toast('已排队:场景分镜', 'ok'); throttledRefresh(); });
+    } });
     items.push({ label: '🎨 生成/重生成封面', run: () => api(`/api/projects/${S.project.id}/generate/cover`, 'POST', {}).then(() => { toast('封面已排队', 'ok'); throttledRefresh(); }) });
     items.push({ label: '🎬 批量生成视频(需锁定场景)', run: () => api(`/api/projects/${S.project.id}/generate/clips`, 'POST', S.flow.scene ? { sceneId: S.flow.scene } : {}).then(() => { toast('已排队:视频', 'ok'); throttledRefresh(); }) });
     items.push({ label: '🔊 批量配音(未变化的自动跳过)', run: () => api(`/api/projects/${S.project.id}/generate/voice`, 'POST', {}).then(() => { toast('已排队:配音', 'ok'); throttledRefresh(); }) });
