@@ -1,0 +1,6 @@
+node_modules/
+.venv/
+data/settings.json
+data/projects/
+*.log
+.DS_Store
