@@ -186,9 +186,131 @@ function buildGraph(p, settings, view) {
     : overviewGraph(p, settings);
 }
 
-/* shotsGraph 在 Task 3 实现;先给空实现让总览测试通过 */
-function shotsGraph() {
-  return { view: "shots", nodes: [], edges: [], bounds: { w: 800, h: 600 } };
+function shotsGraph(p, settings) {
+  const scenes = p.scenes || [];
+  const shots = p.shots || [];
+  const running = p.running || "";
+  const nodes = [];
+  const edges = [];
+
+  // 每组高度 = 头部 + 镜头数 ×(卡高+间距)+ 底部内边距
+  const groups = scenes.map((sc) => {
+    const ss = shots
+      .filter((s) => s.sceneId === sc.id)
+      .sort((a, b) => a.idx - b.idx);
+    return {
+      sc,
+      ss,
+      h: FG.SG_HEAD + ss.length * (FG.SHH + FG.SH_GAP) + FG.SG_PAD + 10,
+    };
+  });
+
+  // 行布局:行高 = 该行最高组,y 逐行累计
+  let cursorY = FG.SG_Y;
+  let maxRight = 0;
+  for (let i = 0; i < groups.length; i += FG.SC_COLS) {
+    const rowG = groups.slice(i, i + FG.SC_COLS);
+    let rowH = 0;
+    rowG.forEach((g, c) => {
+      g.x = FG.SG_X + c * (FG.SGW + FG.SG_GAPX);
+      g.y = cursorY;
+      rowH = Math.max(rowH, g.h);
+      maxRight = Math.max(maxRight, g.x + FG.SGW);
+    });
+    cursorY += rowH + FG.SG_GAPY;
+  }
+
+  groups.forEach((g) => {
+    const anyRun = g.ss.some((s) =>
+      [s.panelStatus, s.clipStatus, s.voiceStatus].includes("pending"),
+    );
+    const anyErr = g.ss.some((s) =>
+      [s.panelStatus, s.clipStatus, s.voiceStatus].includes("error"),
+    );
+    const st = anyRun
+      ? "run"
+      : anyErr
+        ? "error"
+        : g.ss.length > 0 && g.ss.every((s) => s.panelStatus === "done")
+          ? "done"
+          : "pending";
+    nodes.push({
+      id: "scene:" + g.sc.id,
+      kind: "scene",
+      icon: g.sc.locked ? "🔒" : "🎞",
+      title: g.sc.title,
+      status: st,
+      locked: !!g.sc.locked,
+      sceneId: g.sc.id,
+      desc: g.sc.description || "",
+      stats: g.sc.stats || {
+        shots: g.ss.length,
+        panels: 0,
+        clips: 0,
+        voices: 0,
+      },
+      x: g.x,
+      y: g.y,
+      w: FG.SGW,
+      h: g.h,
+      ports: { in: [0, FG.SG_HEAD / 2], out: [FG.SGW, FG.SG_HEAD / 2] },
+    });
+    g.ss.forEach((s, i) => {
+      nodes.push({
+        id: "shot:" + g.sc.id + ":" + s.idx,
+        kind: "shot",
+        idx: s.idx,
+        sceneId: g.sc.id,
+        title: "第 " + s.idx + " 镜",
+        line: (s.dialogue || s.visual || "").slice(0, 60),
+        thumbUrl: s.panelUrl || "",
+        pips: {
+          txt: "done",
+          img: fgStage(s.panelStatus),
+          vid: fgStage(s.clipStatus),
+          aud: fgStage(s.voiceStatus),
+        },
+        x: g.x + FG.SG_PAD,
+        y: g.y + FG.SG_HEAD + i * (FG.SHH + FG.SH_GAP),
+        w: FG.SHW,
+        h: FG.SHH,
+        ports: { in: [0, FG.SHH / 2], out: [FG.SHW, FG.SHH / 2] },
+      });
+    });
+  });
+
+  // 合成节点(最宽组右侧)
+  const filmX = maxRight + FG.FILM_GAP;
+  nodes.push({
+    id: "film",
+    kind: "film",
+    icon: "🎞",
+    title: "合成成片",
+    status: p.filmUrl ? "done" : running === "film" ? "run" : "pending",
+    sub: p.filmUrl ? "成片就绪" : "汇总全部镜头",
+    x: filmX,
+    y: FG.SG_Y,
+    w: FG.FILM_W,
+    h: FG.NODE_H,
+    ports: { in: [0, FG.NODE_H / 2], out: [FG.FILM_W, FG.NODE_H / 2] },
+  });
+
+  nodes
+    .filter((n) => n.kind === "shot")
+    .forEach((n) => {
+      edges.push({
+        id: "e_" + n.id.replace(/:/g, "_"),
+        from: n.id,
+        to: "film",
+      });
+    });
+
+  return {
+    view: "shots",
+    nodes,
+    edges,
+    bounds: { w: filmX + FG.FILM_W + 60, h: cursorY + 60 },
+  };
 }
 
 if (typeof module !== "undefined" && module.exports) {

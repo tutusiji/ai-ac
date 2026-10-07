@@ -144,3 +144,121 @@ test("总览:布局为左→右等距分列", () => {
   }
   assert.ok(g.bounds.w > g.nodes[7].x + g.nodes[7].w);
 });
+
+test("镜头层:场景成组、pips 映射、全部汇入合成节点", () => {
+  const p = mkProj({
+    scenes: [
+      {
+        id: "sc_a",
+        title: "场景A",
+        locked: true,
+        arcId: "",
+        beatId: "",
+        stats: { shots: 2, panels: 2, clips: 1, voices: 1 },
+      },
+      {
+        id: "sc_b",
+        title: "场景B",
+        locked: false,
+        arcId: "",
+        beatId: "",
+        stats: { shots: 1, panels: 0, clips: 0, voices: 0 },
+      },
+    ],
+    shots: [
+      mkShot(1, "sc_a", {
+        panelStatus: "done",
+        clipStatus: "animatic",
+        dialogue: "词",
+        voiceStatus: "skipped",
+      }),
+      mkShot(2, "sc_a", { panelStatus: "pending" }),
+      mkShot(3, "sc_b", { panelStatus: "error" }),
+    ],
+  });
+  const g = buildGraph(p, SETTINGS, "shots");
+  const byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
+  const ga = byId["scene:sc_a"];
+  assert.equal(ga.kind, "scene");
+  assert.equal(ga.locked, true);
+  assert.equal(ga.stats.shots, 2);
+  const s1 = byId["shot:sc_a:1"];
+  assert.deepEqual(s1.pips, {
+    txt: "done",
+    img: "done",
+    vid: "done",
+    aud: "skip",
+  });
+  assert.equal(byId["shot:sc_a:2"].pips.img, "run");
+  assert.equal(byId["shot:sc_b:3"].pips.img, "error");
+  const shotEdges = g.edges.filter((e) => e.to === "film");
+  assert.equal(shotEdges.length, 3);
+  assert.ok(byId.film.x > Math.max(ga.x, byId["scene:sc_b"].x));
+});
+
+test("旧格式项目:整集(旧)场景正常成组", () => {
+  const p = mkProj({
+    scenes: [
+      {
+        id: "sc_old",
+        title: "整集(旧)",
+        arcId: "",
+        beatId: "",
+        locked: false,
+        stats: { shots: 6, panels: 6, clips: 6, voices: 6 },
+      },
+    ],
+    shots: Array.from({ length: 6 }, (_, i) =>
+      mkShot(i + 1, "sc_old", { panelStatus: "done" }),
+    ),
+  });
+  const g = buildGraph(p, SETTINGS, "shots");
+  assert.ok(
+    g.nodes.find((n) => n.id === "scene:sc_old"),
+    "整集(旧)必须有分组节点",
+  );
+  assert.equal(g.nodes.filter((n) => n.kind === "shot").length, 6);
+  assert.equal(g.edges.filter((e) => e.to === "film").length, 6);
+  assert.doesNotThrow(() => buildGraph(p, SETTINGS, "overview"));
+});
+
+test("镜头层:场景网格 3 列换行、镜头卡在组内偏移", () => {
+  const scenes = Array.from({ length: 4 }, (_, i) => ({
+    id: "sc_" + i,
+    title: "场景" + i,
+    locked: false,
+    arcId: "",
+    beatId: "",
+    stats: { shots: 1, panels: 0, clips: 0, voices: 0 },
+  }));
+  const p = mkProj({
+    scenes,
+    shots: scenes.map((s, i) => mkShot(i + 1, s.id)),
+  });
+  const g = buildGraph(p, SETTINGS, "shots");
+  const groups = g.nodes.filter((n) => n.kind === "scene");
+  assert.ok(groups[3].y > groups[0].y + groups[0].h, "第 4 场景必须换行");
+  const s = g.nodes.find((n) => n.id === "shot:sc_0:1");
+  assert.ok(s.x > groups[0].x && s.y > groups[0].y, "镜头卡在组内偏移");
+});
+
+test("镜头层:空场景只有分组节点,无镜头边,film 始终存在", () => {
+  const p = mkProj({
+    scenes: [
+      {
+        id: "sc_empty",
+        title: "空场景",
+        arcId: "",
+        beatId: "",
+        locked: false,
+        stats: { shots: 0, panels: 0, clips: 0, voices: 0 },
+      },
+    ],
+    shots: [],
+  });
+  const g = buildGraph(p, SETTINGS, "shots");
+  assert.ok(g.nodes.find((n) => n.id === "scene:sc_empty"));
+  assert.ok(!g.nodes.some((n) => n.kind === "shot"));
+  assert.ok(!g.edges.some((e) => e.to === "film"));
+  assert.ok(g.nodes.find((n) => n.id === "film"));
+});
