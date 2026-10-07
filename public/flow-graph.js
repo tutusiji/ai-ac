@@ -186,6 +186,13 @@ function buildGraph(p, settings, view) {
     : overviewGraph(p, settings);
 }
 
+function zoomAt(vp, deltaY, cx, cy) {
+  const scale = fgClamp(vp.scale * Math.exp(-deltaY * 0.0016), 0.3, 2.5);
+  // 平移量使光标下的世界点保持不动:(cx-x)/scale 不变
+  const k = scale / vp.scale;
+  return { x: cx - (cx - vp.x) * k, y: cy - (cy - vp.y) * k, scale };
+}
+
 function shotsGraph(p, settings) {
   const scenes = p.scenes || [];
   const shots = p.shots || [];
@@ -314,5 +321,5 @@ function shotsGraph(p, settings) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { buildGraph, zoomAt: null, FG, fgStage }; // zoomAt 在 Task 4 补上
+  module.exports = { buildGraph, zoomAt, FG, fgStage };
 }

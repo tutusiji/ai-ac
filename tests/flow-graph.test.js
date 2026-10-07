@@ -262,3 +262,17 @@ test("镜头层:空场景只有分组节点,无镜头边,film 始终存在", () 
   assert.ok(!g.edges.some((e) => e.to === "film"));
   assert.ok(g.nodes.find((n) => n.id === "film"));
 });
+
+const { zoomAt } = require("../public/flow-graph.js");
+
+test("zoomAt: 缩放锚定光标,钳制 0.3~2.5", () => {
+  const vp = { x: 100, y: 50, scale: 1 };
+  const wx = (400 - vp.x) / vp.scale; // 光标下的世界坐标
+  const vp2 = zoomAt(vp, -240, 400, 300);
+  assert.ok(Math.abs((400 - vp2.x) / vp2.scale - wx) < 1e-9);
+  assert.ok(vp2.scale > 1 && vp2.scale <= 2.5);
+  const vp3 = zoomAt({ x: 0, y: 0, scale: 2.5 }, -99999, 400, 300);
+  assert.equal(vp3.scale, 2.5);
+  const vp4 = zoomAt({ x: 0, y: 0, scale: 0.3 }, 99999, 400, 300);
+  assert.equal(vp4.scale, 0.3);
+});
