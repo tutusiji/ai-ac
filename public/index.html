@@ -1,27 +1,50 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>漫剧工坊 · Manju Studio</title>
-<link rel="stylesheet" href="/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
-</head>
-<body>
-<header id="topbar">
-  <div class="brand" data-act="home">
-    <span class="logo">🎬</span>
-    <div><b>漫剧工坊</b><small>Manju Studio · 火山方舟版</small></div>
-  </div>
-  <div class="top-actions">
-    <span id="health-chip" class="chip"></span>
-    <button class="btn ghost" data-act="why-ark" title="平台选型比价结论">❓</button>
-    <button class="btn ghost" data-act="open-settings">⚙ 设置</button>
-  </div>
-</header>
-<main id="app"></main>
-<div id="modal-root"></div>
-<div id="toasts"></div>
-<script src="/app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>漫剧工坊 · Manju Studio</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/flow.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>"
+    />
+  </head>
+  <body>
+    <header id="topbar">
+      <div class="brand" data-act="home">
+        <span class="logo">🎬</span>
+        <div><b>漫剧工坊</b><small>Manju Studio · 火山方舟版</small></div>
+      </div>
+      <div class="top-actions">
+        <span id="health-chip" class="chip"></span>
+        <button class="btn ghost" data-act="why-ark" title="平台选型比价结论">
+          ❓
+        </button>
+        <button class="btn ghost" data-act="open-settings">⚙ 设置</button>
+      </div>
+    </header>
+    <main id="app"></main>
+    <div id="modal-root"></div>
+    <div id="toasts"></div>
+    <div id="fw-drawer">
+      <div class="fw-drawer-head"><div class="fw-drawer-title"></div>
+        <button class="fw-btn" data-act="flow-close-panel">✕</button></div>
+      <div class="fw-drawer-body"></div>
+    </div>
+    <div id="fw-overlay">
+      <div class="fw-overlay-head"><div class="fw-overlay-title"></div>
+        <button class="fw-btn" data-act="flow-close-overlay">✕ 关闭</button></div>
+      <div class="fw-overlay-body"></div>
+    </div>
+    <div id="fw-logs">
+      <div class="fw-logs-head"><b>📜 执行日志</b><span class="fw-spacer"></span>
+        <button class="fw-btn" data-act="flow-close-logs">✕ 收起</button></div>
+      <div class="fw-logs-body"></div>
+    </div>
+    <script src="/flow-graph.js"></script>
+    <script src="/flow.js"></script>
+    <script src="/app.js"></script>
+  </body>
 </html>

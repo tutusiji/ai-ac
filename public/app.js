@@ -9,45 +9,62 @@ const S = {
 function uid(p) { return p + '_' + Math.random().toString(36).slice(2, 9); }
 
 /* ---------- 前端路由:URL 即状态,刷新/直达/后退不丢位置 ---------- */
-const TABS = ['story', 'shots', 'chars', 'script', 'film', 'logs'];
-function projectPath(tab) {
-  if (!S.project) return '/';
-  let p = '/project/' + S.project.id + (tab ? '/' + tab : '');
-  if (tab === 'shots' && S.sceneId && S.sceneId !== '__all__') p += '?scene=' + S.sceneId;
-  return p;
+/* 旧 tab URL → flow query(书签不失效) */
+const FLOW_TAB_MAP = { story: 'overlay=story', shots: 'view=shots', chars: 'sel=chars', script: 'sel=idea', film: 'sel=film', logs: 'drawer=logs' };
+
+function applyFlowQuery(u) {
+  const q = u.searchParams;
+  S.flow = {
+    view: q.get('view') === 'shots' ? 'shots' : 'overview',
+    sel: q.get('sel') || '',
+    scene: q.get('scene') || '',
+    overlay: q.get('overlay') === 'story' ? 'story' : '',
+    drawer: q.get('drawer') === 'logs' ? 'logs' : '',
+  };
+  if (S.flow.scene) S.sceneId = S.flow.scene; /* 兼容仍读 S.sceneId 的生成兜底 */
 }
+
+function flowUrl(over = {}) {
+  const f = { view: 'overview', sel: '', scene: '', overlay: '', drawer: '', ...(S.flow || {}), ...over };
+  const q = new URLSearchParams();
+  if (f.view === 'shots') q.set('view', 'shots');
+  if (f.sel) q.set('sel', f.sel);
+  if (f.scene && f.view === 'shots') q.set('scene', f.scene);
+  if (f.overlay) q.set('overlay', f.overlay);
+  if (f.drawer) q.set('drawer', f.drawer);
+  const qs = q.toString();
+  return '/project/' + S.project.id + (qs ? '?' + qs : '');
+}
+function flowNav(over = {}) { navigate(flowUrl(over)); }
 function navigate(path) {
   if (location.pathname + location.search !== path) history.pushState({}, '', path);
   handleRoute();
 }
 async function handleRoute() {
-  closeModal();
+  closeModal(); closePalette();
   const u = new URL(location.href);
   const seg = u.pathname.replace(/\/+$/, '').split('/').filter(Boolean);
-  if (seg[0] === 'project' && seg[1]) {
-    const pid = seg[1];
-    const tab = TABS.includes(seg[2]) ? seg[2] : '';
-    const scene = u.searchParams.get('scene') || '';
-    if (S.project && S.project.id === pid) {
-      S.view = 'project';
-      if (tab) S.tab = tab;
-      if (scene) S.sceneId = scene;
-      render();
-    } else {
-      try {
-        await openProject(pid, tab || undefined);
-        if (scene && S.sceneId !== scene) { S.sceneId = scene; render(); }
-      } catch (e) {
-        toast('项目不存在或已删除,回到首页', 'err');
-        history.replaceState({}, '', '/');
-        S.view = 'home'; S.project = null; render();
-      }
-    }
-  } else {
+  if (seg[0] !== 'project' || !seg[1]) {
     S.view = 'home'; S.project = null;
     if (S.sse) { S.sse.close(); S.sse = null; }
-    clearInterval(S.pollTimer);
-    render();
+    clearInterval(S.pollTimer); S.pollTimer = null;
+    return render();
+  }
+  const pid = seg[1];
+  /* 旧 tab 路径一次性重定向到等价 flow 视图(书签不失效) */
+  if (seg[2] && FLOW_TAB_MAP[seg[2]]) {
+    history.replaceState({}, '', '/project/' + pid + '?' + FLOW_TAB_MAP[seg[2]]);
+    return handleRoute();
+  }
+  if (seg[2]) history.replaceState({}, '', '/project/' + pid); /* 未知路径回落总览 */
+  applyFlowQuery(u);
+  if (S.project && S.project.id === pid) { S.view = 'project'; render(); return; }
+  try {
+    await openProject(pid);
+  } catch (e) {
+    toast('项目不存在或已删除,回到首页', 'err');
+    history.replaceState({}, '', '/');
+    S.view = 'home'; S.project = null; render();
   }
 }
 window.addEventListener('popstate', handleRoute);
@@ -141,12 +158,8 @@ function renderHealth() {
   chip.textContent = has ? (h.ttsReady || h.aliyunConfigured ? `● 引擎就绪(${parts.join('+')})` : '● Key 已配置 / TTS 缺失') : '○ 演示模式(未配置 Key)';
   chip.className = 'chip ' + (has ? (h.ttsReady || h.aliyunConfigured ? 'ok' : 'err') : '');
 }
-async function openProject(pid, forceTab) {
+async function openProject(pid) {
   S.project = await api('/api/projects/' + pid);
-  // 反抽卡:新项目优先进入脉络工作室
-  S.tab = forceTab || ((!S.project.shots.length && !(S.project.story && S.project.story.arcs.length)) ? 'story' : (S.tab === 'story' ? 'story' : 'shots'));
-  const firstScene = (S.project.scenes || [])[0];
-  if (!S.project.scenes || !S.project.scenes.some(s => s.id === S.sceneId)) S.sceneId = firstScene ? firstScene.id : '';
   S.view = 'project';
   watch(pid);
   render();
@@ -344,16 +357,20 @@ function stepChip(stage, label, n, project) {
 function nextStepOf(p) {
   const shots = p.shots || [], scenes = p.scenes || [], chars = p.characters || [];
   const story = p.story || {};
-  const goto = tab => () => navigate(projectPath(tab));
+  const goto = t => () => {
+    if (t === 'script') return flowNav({ view: 'overview', sel: 'idea' });
+    if (t === 'shots') return flowNav({ view: 'shots' });
+    flowNav({ overlay: 'story' });
+  };
   if (!p.script && !story.premise) return { text: '从一句话创意开始:先写一段故事创意', btn: '去剧本', go: goto('script') };
   if (!story.premise && !(story.arcs || []).length) return { text: '让 AI 起草故事骨架,开始脉络设计', btn: '去脉络', go: goto('story') };
   if (!(story.arcs || []).length) return { text: '把故事走向拆成大章节', btn: '去脉络', go: goto('story') };
   if (!scenes.length) return { text: '把节拍拆成可拍摄的场景', btn: '去脉络', go: goto('story') };
   const empty = scenes.find(s => !shots.some(x => x.sceneId === s.id));
-  if (empty) return { text: `为「${empty.title}」生成分镜(纯文本,免费)`, btn: '去生成', go: () => navigate(`/project/${p.id}/shots?scene=${empty.id}`) };
+  if (empty) return { text: `为「${empty.title}」生成分镜(纯文本,免费)`, btn: '去生成', go: () => flowNav({ view: 'shots', scene: empty.id }) };
   if (chars.some(c => !c.refImage)) return { text: '生成缺失的角色设定图(跨镜头形象一致的基础)', btn: '去生成', gen: { stage: 'characters' } };
   const noPanel = shots.find(s => s.panelStatus !== 'done');
-  if (noPanel) return { text: `为第 ${noPanel.idx} 镜生成画面(套餐内 0 现金)`, btn: '去生成', go: () => navigate(`/project/${p.id}/shots?scene=${noPanel.sceneId}`), gen: { stage: 'panels', body: { shotIdx: noPanel.idx } } };
+  if (noPanel) return { text: `为第 ${noPanel.idx} 镜生成画面(套餐内 0 现金)`, btn: '去生成', go: () => flowNav({ view: 'shots', scene: noPanel.sceneId }), gen: { stage: 'panels', body: { shotIdx: noPanel.idx } } };
   if (!scenes.some(s => s.locked)) return { text: '分镜满意后 🔒 锁定场景,才解锁批量视频', btn: '去锁定', go: goto('shots') };
   const lockedPending = shots.filter(s => { const sc = scenes.find(x => x.id === s.sceneId); return sc && sc.locked && s.panelStatus === 'done' && s.clipStatus === 'none'; });
   if (lockedPending.length) {
@@ -366,65 +383,107 @@ function nextStepOf(p) {
   return { text: '全流程完成 —— 可重roll细节、生成封面,或新建下一集', btn: '生成封面', gen: { stage: 'cover' } };
 }
 
+/* ---------- 渲染:项目(全屏画布壳) ---------- */
+const FLOW_STAGE_LABELS = { storyboard: '分镜脚本', sceneShots: '场景分镜', characters: '角色图',
+  panels: '分镜图', clips: '视频', voice: '配音', film: '合成', cover: '封面' };
+
 function renderProject() {
   const p = S.project;
   S._ns = nextStepOf(p);
-  const shots = p.shots || [];
-  const chars = p.characters || [];
-  const engineAnimatic = S.settings.videoEngine === 'animatic';
-  const withDlg = shots.filter(s => (s.dialogue || '').trim());
-  const doneCount = (arr, f) => arr.filter(f).length;
-
-  const steps = [
-    stepChip('storyboard', '① 分镜脚本', shots.length ? shots.length + '镜' : '', p),
-    stepChip('characters', '② 角色图', chars.length ? `${doneCount(chars, c => c.refImage)}/${chars.length}` : '', p),
-    stepChip('panels', '③ 分镜图', shots.length ? `${doneCount(shots, s => s.panelStatus === 'done')}/${shots.length}` : '', p),
-    stepChip('clips', engineAnimatic ? '④ 动态漫(免费)' : '④ 视频片段(锁定后)', shots.length ? (engineAnimatic ? '已启用' : `${doneCount(shots, s => s.clipStatus === 'done')}/${shots.length}`) : '', p),
-    stepChip('voice', '⑤ 配音', withDlg.length ? `${doneCount(shots, s => s.voiceStatus === 'done')}/${withDlg.length}` : '', p),
-    stepChip('film', '⑥ 合成成片', p.film ? '✓' : '', p),
-  ];
-
-  const tabs = [
-    ['story', '脉络'], ['shots', `分镜台(${shots.length})`], ['chars', `角色(${chars.length})`],
-    ['script', '剧本'], ['film', '成片'], ['logs', '日志'],
-  ].map(([k, label]) => `<div class="tab ${S.tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${label}</div>`).join('');
-
   app().innerHTML = `
-  <div class="proj-head">
-    <span class="back" data-act="home">← 项目</span>
-    <h1 data-act="rename-project" title="点击重命名">${esc(p.title)}</h1>
-    <span class="chip">${esc(p.style)}</span>
-    <span class="chip">${engineAnimatic ? '动态漫模式' : 'Seedance ' + S.settings.resolution}</span>
-    <span class="spacer"></span>
-    <span class="status-dot ${p.running ? 'run' : p.lastError ? 'err' : shots.length && p.film ? 'ok' : ''}"></span>
-    <span style="font-size:12px;color:var(--dim)">${p.running ? '执行中:' + p.running : p.lastError ? '出错' : shots.length ? '待命' : '空项目'}</span>
-    <span class="cost-chip" title="按约值单价估算:生图 ¥0.2/张 · 视频 ¥${S.prices.video720}/条(720p) · TTS ¥0">预估已花费 ≈ ¥${p.cost || 0}</span>
-    ${p.coverImageUrl ? `<img src="${p.coverImageUrl}" class="cover-thumb" data-act="preview" data-kind="img" data-url="${p.coverImageUrl}" title="封面图,点击放大">` : ''}
-    <button class="btn small" data-act="gen" data-stage="cover">🎨 ${p.coverImageUrl ? '重生成封面' : '生成封面'}</button>
-    <button class="btn small" data-act="undo" ${p.history && p.history.undo ? '' : 'disabled'} title="撤销:${esc((p.history && p.history.last) || '无')}">↶ 撤销${p.history && p.history.undo ? '(' + p.history.undo + ')' : ''}</button>
-    <button class="btn small" data-act="redo" ${p.history && p.history.redo ? '' : 'disabled'} title="重做">↷ 重做${p.history && p.history.redo ? '(' + p.history.redo + ')' : ''}</button>
-    ${p.running ? '<button class="btn small danger" data-act="stop">⏹ 停止队列</button>' : ''}
-  </div>
-  ${p.lastError ? `<div class="err-banner">⚠ ${esc(p.lastError)}<br><span style="color:var(--dim)">可在「设置」中更换已开通的模型,或到火山方舟控制台开通对应模型后重试。</span></div>` : ''}
-  ${S._ns ? `<div class="nextstep"><span class="ns-badge">下一步</span><span class="ns-text">${esc(S._ns.text)}</span><button class="btn small primary" data-act="ns-go">${esc(S._ns.btn)}</button><span class="hint" style="margin-left:auto">Ctrl+K = 命令面板</span></div>` : ''}
-  <div class="pipeline">${steps.join('')}</div>
-  <div class="tabs">${tabs}</div>
-  <div id="tab-body">${renderTab()}</div>`;
+  <div class="flow-shell">
+    <div class="fw-toolbar" id="fw-toolbar">${toolbarHtml(p)}</div>
+    <div id="flow-root"></div>
+  </div>`;
+  mountFlow();
+  syncHosts();
 }
 
-function renderTab() {
-  if (S.tab === 'story') return renderStory();
-  if (S.tab === 'shots') return renderShots();
-  if (S.tab === 'chars') return renderChars();
-  if (S.tab === 'script') return renderScript();
-  if (S.tab === 'film') return renderFilm();
-  if (S.tab === 'logs') {
-    const logs = (S.project.log || []).slice().reverse();
-    return `<div class="panel-card"><h3>执行日志</h3><div class="log-list">${
-      logs.map(l => `<div><span class="t">${new Date(l.t).toLocaleTimeString('zh-CN')}</span>${esc(l.msg)}</div>`).join('') || '<div class="empty">暂无日志</div>'
-    }</div></div>`;
+function toolbarHtml(p) {
+  const canUndo = p.history && p.history.undo, canRedo = p.history && p.history.redo;
+  return `
+    <button class="fw-btn" data-act="home" title="返回首页">☰</button>
+    <b class="fw-chip" data-act="rename-project" style="cursor:pointer" title="点击重命名">${esc(p.title)}</b>
+    ${p.running ? `<span class="fw-chip">⏳ ${esc(FLOW_STAGE_LABELS[p.running] || p.running)} 运行中</span>
+      <button class="fw-btn danger" data-act="stop">⏹ 停止</button>`
+      : (p.lastError ? '<span class="fw-chip" style="color:var(--err)">⚠ 出错,见日志</span>' : '')}
+    ${S._ns ? `<span class="fw-chip">下一步:${esc(S._ns.text)}</span>
+      <button class="fw-btn primary" data-act="ns-go">${esc(S._ns.btn)}</button>` : ''}
+    <span class="fw-spacer"></span>
+    <span class="fw-chip" title="按约值单价估算">¥<b>${Number(p.cost || 0).toFixed(2)}</b></span>
+    <button class="fw-btn" data-act="undo" ${canUndo ? '' : 'disabled'} title="撤销:${esc((p.history && p.history.last) || '无')}">↶</button>
+    <button class="fw-btn" data-act="redo" ${canRedo ? '' : 'disabled'} title="重做">↷</button>
+    <span class="fw-chip fw-conn" id="fw-conn" hidden>重连中…</span>
+    <button class="fw-btn" data-act="flow-logs" title="执行日志">📜</button>
+    <button class="fw-btn" data-act="open-settings" title="设置">⚙</button>
+    <button class="fw-btn" data-act="flow-reset-layout" title="重置画布布局">🧹</button>
+    <button class="fw-btn" data-act="flow-fullscreen" title="浏览器全屏">⛶</button>`;
+}
+function updateToolbar() { const el = $('#fw-toolbar'); if (el) el.innerHTML = toolbarHtml(S.project); }
+
+function logsHtml() {
+  const logs = ((S.project && S.project.log) || []).slice().reverse();
+  return logs.map(l => `<div>${new Date(l.t).toLocaleTimeString('zh-CN')}  ${esc(l.msg)}</div>`).join('')
+    || '<div class="empty">暂无日志</div>';
+}
+
+function mountFlow() {
+  const rootEl = $('#flow-root');
+  if (!rootEl) return;
+  Flow.setProject(S.project.id);
+  Flow.mount(rootEl, { onSelect: onNodeSelect, onOpenNode: onNodeOpen });
+  rebuildGraph(true);
+}
+
+function rebuildGraph(fit) {
+  try {
+    S._graph = buildGraph(S.project, S.settings, S.flow.view);
+  } catch (e) {
+    console.error('buildGraph failed', e);
+    toast('画布构图异常:' + e.message + ',可点工具条 🧹 重置布局', 'err');
+    return;
   }
-  return '';
+  Flow.setGraph(S._graph);
+  if (fit) Flow.fit();
+  if (S.flow.sel) {
+    const n = (S._graph.nodes || []).find(x => x.id === S.flow.sel);
+        if (n) { Flow.select(n.id); flowPanelFor(n); }
+  }
+}
+
+/* URL 里的 overlay/drawer 落到宿主(Task 9 精修脉络浮层) */
+function syncHosts() {
+  if (S.flow.overlay === 'story') FlowUI.openOverlay('🧭 脉络工作室', renderStory());
+  else FlowUI.closeOverlay();
+  if (S.flow.drawer === 'logs') FlowUI.openLogs(logsHtml());
+}
+
+function flowPanelFor(n) {
+  if (n.id === 'idea') return FlowUI.openPanel(n, renderScript());
+  if (n.id === 'chars') return FlowUI.openPanel(n, renderChars());
+  if (n.id === 'film') return FlowUI.openPanel(n, renderFilm());
+  /* 其余节点:Task 7 提供专用面板;此兜底展示节点摘要,操作走节点按钮 / Ctrl+K */
+  return FlowUI.openPanel(n, `<div class="panel-card"><h3>${esc((n.icon || '') + ' ' + n.title)}</h3>
+    <div class="hint">${esc(n.sub || n.desc || '')}</div>
+    <div class="note" style="margin-top:10px;color:var(--dim);font-size:12.5px">操作入口:节点卡上的按钮,或 Ctrl+K 命令面板。</div></div>`);
+}
+
+function onNodeSelect(id) {
+  if (!id) {
+    FlowUI.closePanel();
+    history.replaceState({}, '', flowUrl({ sel: '' }));
+    return;
+  }
+  const n = (S._graph.nodes || []).find(x => x.id === id);
+  if (!n) return; /* URL 带了已失效的 sel:静默忽略 */
+  Flow.select(id);
+  flowPanelFor(n);
+  history.replaceState({}, '', flowUrl({ sel: id }));
+}
+
+function onNodeOpen(id) { /* 双击 */
+  if (id === 'story') { flowNav({ view: S.flow.view === 'overview' ? 'shots' : 'overview' }); return; }
+  if (id.startsWith('scene:')) { flowNav({ view: 'shots', scene: id.slice(6) }); return; }
 }
 
 function renderShots() {
@@ -664,8 +723,8 @@ document.addEventListener('click', async e => {
       const p = await api('/api/projects', 'POST', body);
       closeModal();
       toast(body.autostart ? '项目已创建,正在生成分镜…' : '项目已创建,先去「脉络」打磨故事走向', 'ok');
-      await openProject(p.id, body.autostart ? 'shots' : 'story');
-      history.pushState({}, '', projectPath(S.tab));
+      await openProject(p.id);
+      navigate('/project/' + p.id + (body.autostart ? '?view=shots' : '?overlay=story'));
     } else if (act === 'open-settings') settingsModal();
     else if (act === 'why-ark') whyArkModal();
     else if (act === 'set-prov') { S.settings[el.dataset.cap + 'Provider'] = el.dataset.v; settingsModal(); }
@@ -790,8 +849,7 @@ document.addEventListener('click', async e => {
           cast: String(s.cast || '').split(/[,，]/).map(t => t.trim()).filter(Boolean), description: s.description, locked: false }));
         S.project = await api('/api/projects/' + pid, 'PUT', { scenes: (S.project.scenes || []).concat(fresh), label: '采纳 AI 草稿' });
       }
-      S.draft = null; closeModal(); toast('已采纳写入', 'ok'); S.tab = 'story';
-      history.replaceState({}, '', projectPath('story')); render();
+      S.draft = null; closeModal(); toast('已采纳写入', 'ok'); flowNav({ overlay: 'story' });
     } else if (act === 'add-arc') {
       const nid = uid('arc');
       const arcs = (S.project.story.arcs || []).concat([{ id: nid, title: '新章节', purpose: '', summary: '', beats: [] }]);
@@ -828,7 +886,7 @@ document.addEventListener('click', async e => {
       if (S.sceneId === el.dataset.sceneId) S.sceneId = '';
       render();
     } else if (act === 'goto-scene') {
-      navigate('/project/' + S.project.id + '/shots?scene=' + el.dataset.sceneId);
+      flowNav({ view: 'shots', scene: el.dataset.sceneId });
     } else if (act === 'toggle-lock') {
       const scenes = (S.project.scenes || []).map(s => s.id === el.dataset.sceneId ? { ...s, locked: !s.locked } : s);
       void 0;
@@ -846,8 +904,7 @@ document.addEventListener('click', async e => {
       if (!script.trim()) return toast('请先写故事创意', 'err');
       await api(`/api/projects/${S.project.id}/generate/storyboard`, 'POST', { script, style, shotsTarget });
       toast('已提交分镜生成…'); throttledRefresh();
-    } else if (act === 'tab') { navigate(projectPath(el.dataset.tab)); }
-    else if (act === 'gen') {
+    } else if (act === 'gen') {
       const body = {};
       if (el.dataset.shotIdx) body.shotIdx = Number(el.dataset.shotIdx);
       if (el.dataset.stage === 'storyboard') body.script = S.project.script;
@@ -858,6 +915,12 @@ document.addEventListener('click', async e => {
       throttledRefresh();
     } else if (act === 'stop') { await api(`/api/projects/${S.project.id}/stop`, 'POST', {}); toast('将在当前镜头完成后停止'); }
     else if (act === 'preview') lightbox(el.dataset.kind, el.dataset.url);
+    else if (act === 'flow-logs') { FlowUI.openLogs(logsHtml()); }
+    else if (act === 'flow-close-panel') { FlowUI.closePanel(); history.replaceState({}, '', flowUrl({ sel: '' })); }
+    else if (act === 'flow-close-overlay') { FlowUI.closeOverlay(); history.replaceState({}, '', flowUrl({ overlay: '' })); }
+    else if (act === 'flow-close-logs') { FlowUI.closeLogs(); history.replaceState({}, '', flowUrl({ drawer: '' })); }
+    else if (act === 'flow-fullscreen') { FlowUI.toggleFullscreen(); }
+    else if (act === 'flow-reset-layout') { Flow.resetLayout(); toast('画布布局已重置', 'ok'); }
   } catch (err) {
     toast(err.message + (err.hint ? ' — ' + err.hint : ''), 'err');
   }
@@ -869,7 +932,7 @@ document.addEventListener('change', e => {
   const kind = el.dataset.change;
   if (kind === 'scene-select') {
     S.sceneId = el.value === '__all__' ? '__all__' : el.value;
-    history.replaceState({}, '', projectPath('shots'));
+    history.replaceState({}, '', flowUrl({ view: 'shots' }));
     render(); return;
   }
   const send = async (body) => {
@@ -907,11 +970,17 @@ document.addEventListener('change', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closePalette(); return; }
+  if (e.key === 'Escape') {
+    closeModal(); closePalette();
+    if (S.view === 'project' && S.flow && FlowUI.closeTop()) {
+      history.replaceState({}, '', flowUrl({ sel: '', overlay: '', drawer: '' }));
+    }
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     const k = e.key.toLowerCase();
     if (k === 'k') { e.preventDefault(); openPalette(); return; }
-    if (S.view === 'project' && S.project && S.tab === 'story') {
+    if (S.view === 'project' && S.project && S.flow && S.flow.overlay === 'story') {
       if (k === 'z' && !e.shiftKey) { e.preventDefault(); doHistory('undo'); return; }
       if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); doHistory('redo'); return; }
     }
@@ -921,8 +990,8 @@ document.addEventListener('keydown', e => {
   if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
   if (e.key === '?') { shortcutsModal(); return; }
   if (S.view === 'project' && S.project) {
-    const i = '123456'.indexOf(e.key);
-    if (i >= 0) { navigate(projectPath(TABS[i])); return; }
+    if (e.key === '1') { flowNav({ view: 'overview', sel: '' }); return; }
+    if (e.key === '2') { flowNav({ view: 'shots' }); return; }
     if (e.key === 'u') { doHistory('undo'); return; }
     if (e.key === 'y') { doHistory('redo'); return; }
   } else if (S.view === 'home' && e.key === 'n') { newProjectModal(); }
@@ -931,14 +1000,14 @@ document.addEventListener('keydown', e => {
 function paletteItems() {
   const items = [];
   if (S.view === 'project' && S.project) {
-    ['脉络', '分镜台', '角色', '剧本', '成片', '日志'].forEach((l, i) =>
-      items.push({ label: `切换到 ${l}`, hint: String(i + 1), run: () => navigate(projectPath(TABS[i])) }));
-    items.push({ label: '🪄 AI 生成本场景分镜(纯文本)', run: () => S.sceneId && S.sceneId !== '__all__' ? api(`/api/projects/${S.project.id}/generate/sceneShots`, 'POST', { sceneId: S.sceneId }).then(() => { toast('已排队:场景分镜', 'ok'); throttledRefresh(); }) : toast('请先在分镜台选择一个场景', 'err') });
+    items.push({ label: S.flow.view === 'overview' ? '🖼 切换到镜头图' : '🗺 切换到总览', hint: '1/2',
+      run: () => flowNav({ view: S.flow.view === 'overview' ? 'shots' : 'overview' }) });
+    items.push({ label: '🧹 重置画布布局', run: () => { Flow.resetLayout(); toast('画布布局已重置', 'ok'); } });
     items.push({ label: '🎨 生成/重生成封面', run: () => api(`/api/projects/${S.project.id}/generate/cover`, 'POST', {}).then(() => { toast('封面已排队', 'ok'); throttledRefresh(); }) });
-    items.push({ label: '🔒 锁定/解锁当前场景', run: () => { const sc = (S.project.scenes || []).find(x => x.id === S.sceneId); if (!sc) return toast('请先在分镜台选择场景', 'err'); const scenes = (S.project.scenes || []).map(x => x.id === sc.id ? { ...x, locked: !x.locked } : x); api(`/api/projects/${S.project.id}`, 'PUT', { scenes, label: '锁定切换' }).then(() => { toast(sc.locked ? '已解锁' : '🔒 已锁定', 'ok'); render(); }); } });
-    items.push({ label: '🎬 批量生成视频(当前场景,需锁定)', run: () => api(`/api/projects/${S.project.id}/generate/clips`, 'POST', S.sceneId && S.sceneId !== '__all__' ? { sceneId: S.sceneId } : {}).then(() => { toast('已排队:视频', 'ok'); throttledRefresh(); }) });
+    items.push({ label: '🎬 批量生成视频(需锁定场景)', run: () => api(`/api/projects/${S.project.id}/generate/clips`, 'POST', S.flow.scene ? { sceneId: S.flow.scene } : {}).then(() => { toast('已排队:视频', 'ok'); throttledRefresh(); }) });
     items.push({ label: '🔊 批量配音(未变化的自动跳过)', run: () => api(`/api/projects/${S.project.id}/generate/voice`, 'POST', {}).then(() => { toast('已排队:配音', 'ok'); throttledRefresh(); }) });
     items.push({ label: '🎞 合成成片', run: () => api(`/api/projects/${S.project.id}/generate/film`, 'POST', {}).then(() => { toast('已排队:合成', 'ok'); throttledRefresh(); }) });
+    items.push({ label: '📜 执行日志', run: () => FlowUI.openLogs(logsHtml()) });
     items.push({ label: '↶ 撤销', hint: 'U', run: () => doHistory('undo') });
     items.push({ label: '↷ 重做', hint: 'Y', run: () => doHistory('redo') });
   } else {
@@ -988,9 +1057,10 @@ function shortcutsModal() {
   <table class="cost-table">
     <tr><th>按键</th><th>作用</th></tr>
     <tr><td><span class="kbd">Ctrl</span> + <span class="kbd">K</span></td><td>命令面板:搜索并执行任何操作</td></tr>
-    <tr><td><span class="kbd">1</span> ~ <span class="kbd">6</span></td><td>项目内切换:脉络 / 分镜台 / 角色 / 剧本 / 成片 / 日志</td></tr>
-    <tr><td><span class="kbd">Ctrl</span>+<span class="kbd">Z</span> / <span class="kbd">Y</span></td><td>脉络 tab:撤销 / 重做结构修改</td></tr>
-    <tr><td><span class="kbd">U</span> / <span class="kbd">Y</span></td><td>任意 tab:撤销 / 重做</td></tr>
+    <tr><td><span class="kbd">1</span> / <span class="kbd">2</span></td><td>总览画布 / 镜头图画布</td></tr>
+    <tr><td><span class="kbd">Ctrl</span>+<span class="kbd">Z</span> / <span class="kbd">Y</span></td><td>脉络工作室浮层内:撤销 / 重做结构修改</td></tr>
+    <tr><td><span class="kbd">U</span> / <span class="kbd">Y</span></td><td>任意页面:撤销 / 重做</td></tr>
+    <tr><td><span class="kbd">Esc</span></td><td>依次收起:浮层 → 详情面板 → 日志抽屉</td></tr>
     <tr><td><span class="kbd">N</span></td><td>首页:新建漫剧项目</td></tr>
     <tr><td><span class="kbd">?</span></td><td>打开本速查表</td></tr>
   </table>
