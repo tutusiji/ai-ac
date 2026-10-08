@@ -249,7 +249,11 @@ body.flow-mode #topbar {
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
-.fw-shot-h { padding: 7px 10px 0; font-size: 11px; color: var(--dim); }
+.fw-shot-h {
+  padding: 7px 10px 0;
+  font-size: 11px;
+  color: var(--dim);
+}
 
 /* 悬浮工具条 */
 .fw-toolbar {
@@ -349,6 +353,11 @@ body.flow-mode #topbar {
   flex: 1;
   overflow-y: auto;
   padding: 14px;
+}
+
+/* 成片面板的双列网格(280px 视频列 + 成本表)放不进 430px 抽屉,抽屉内强制单列 */
+#fw-drawer .film-wrap {
+  grid-template-columns: 1fr;
 }
 
 /* 全屏浮层(脉络工作室) */

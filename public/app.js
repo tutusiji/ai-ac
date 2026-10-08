@@ -422,7 +422,7 @@ function renderStory() {
   <div class="wrap-head"><h1 style="font-size:16px">章节与节拍</h1><div class="spacer"></div>
     <button class="btn" data-act="add-arc">＋添加章节</button></div>
   ${arcs.length ? `<div class="story2col"><aside class="arc-nav">${arcNav}</aside><section class="arc-detail">${detail}</section></div>` : '<div class="empty">还没有章节。用「AI 起草故事骨架」一键生成,或「＋添加章节」手动搭。</div>'}
-  <div class="hint" style="margin-top:14px">工作流:走向 → 章节 → 节拍 → 场景 → 分镜台逐场景出分镜(纯文本)→ 满意后 🔒 锁定 → 才解锁批量图/视频。视频闸门在分镜台,锁定前批量生成会被拒绝。</div>`;
+  <div class="hint" style="margin-top:14px">工作流:走向 → 章节 → 节拍 → 场景,再到镜头图逐场景生成纯文本分镜(场景面板里的 🪄)→ 满意后 🔒 锁定 → 才解锁批量图/视频;锁定闸门在场景与视频面板。</div>`;
 }
 
 function showDraftModal() {
@@ -1003,19 +1003,23 @@ function renderChars() {
 
 function renderScript() {
   const p = S.project;
-  return `<div class="panel-card" style="max-width:860px">
+  const hasShots = (p.shots || []).length > 0;
+  return `<div class="panel-card">
     <h3>故事创意 / 剧本</h3>
-    <textarea class="big" id="script-input" placeholder="粘贴你的故事创意或完整剧本,例如:都市夜归的少年在便利店遇到一只会说话的猫,它自称是失业的神明……">${esc(p.script || "")}</textarea>
+    <textarea class="big" id="script-input" style="min-height:200px" placeholder="粘贴你的故事创意或完整剧本,例如:都市夜归的少年在便利店遇到一只会说话的猫,它自称是失业的神明……">${esc(p.script || "")}</textarea>
     <div class="form-row">
-      <span>画风</span>
-      <select id="style-input">${S.styles.map((s) => `<option value="${s.key}" ${p.style === s.key ? "selected" : ""}>${s.label}</option>`).join("")}</select>
-      <span>镜头数</span>
-      <input type="number" id="shots-input" min="3" max="12" value="${p.shotsTarget || 6}" style="width:70px">
-      <div class="spacer"></div>
-      <button class="btn" data-act="save-script">保存</button>
-      <button class="btn primary" data-act="gen-storyboard">✨ ${p.shots.length ? "重新生成分镜(会覆盖现有镜头)" : "生成分镜脚本"}</button>
+      <span style="flex:none">画风</span>
+      <select id="style-input" style="flex:1;min-width:0">${S.styles.map((s) => `<option value="${s.key}" ${p.style === s.key ? "selected" : ""}>${s.label}</option>`).join("")}</select>
     </div>
-    <div style="color:var(--dim);font-size:12.5px;line-height:1.8;margin-top:8px">生成分镜后,到「分镜台」逐镜微调画面描述与台词,再按 ②→⑥ 顺序执行。台词以「(内心)」开头的将作为内心独白配音。</div>
+    <div class="form-row">
+      <span style="flex:none">镜头数</span>
+      <input type="number" id="shots-input" min="3" max="12" value="${p.shotsTarget || 6}" style="width:70px">
+      <span style="flex:1"></span>
+      <button class="btn" data-act="save-script">保存</button>
+    </div>
+    <button class="btn primary" data-act="gen-storyboard" style="width:100%">✨ ${hasShots ? "重新生成分镜脚本" : "生成分镜脚本"}</button>
+    ${hasShots ? '<div style="color:var(--warn);font-size:12.5px;margin-top:8px">⚠️ 项目已有镜头:重新生成会覆盖现有分镜。</div>' : ""}
+    <div style="color:var(--dim);font-size:12.5px;line-height:1.8;margin-top:8px">生成后双击总览「脉络」节点进入镜头图,逐镜微调画面与台词;台词以「(内心)」开头的将作为内心独白配音。要更细的四步创作流,在「脉络」节点面板打开脉络工作室。</div>
   </div>`;
 }
 
