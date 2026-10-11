@@ -139,7 +139,7 @@ function emotionProsody(emotion) {
 
 ### 7.2 字幕样式(ASS Style 参数化)
 
-- 项目字段 `p.subSize`:`小/中/大` → ASS Fontsize 26/34/42(默认 中);描边 Outline 2、阴影 Shadow 1、MarginV 固定下方 1/3。
+- 项目字段 `p.subSize`:`小/中/大` → ASS Fontsize **44/52/62**(默认 中;基线为现行 writeAss 的 52——初稿误写 26/34/42 会使字幕明显缩小,属回归,已修正);描边/阴影/边距沿用现行值(Outline 3、Shadow 1、MarginV 215),本阶段仅参数化字号。
 - film 面板"合成设置"区:转场 select + 字幕字号 select(`data-change="project"` 或显式保存,实现计划定),即时 `PUT`。
 
 ## 8. 数据与兼容
