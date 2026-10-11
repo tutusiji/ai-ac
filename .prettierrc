@@ -1,0 +1,9 @@
+{
+  "singleQuote": true,
+  "overrides": [
+    {
+      "files": ["tests/**", "public/**"],
+      "options": { "singleQuote": false }
+    }
+  ]
+}
