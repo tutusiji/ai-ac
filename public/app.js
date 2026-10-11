@@ -193,13 +193,34 @@ function confirmDialog(message, { okText = "确认删除" } = {}) {
     };
   });
 }
-function lightbox(kind, url) {
+function lightbox(kind, url, shot) {
+  const p = S.project;
+  let refs = [];
+  if (shot && p) {
+    // 一致性质检(spec 深化 D):说话人 + 场景 cast 匹配到的角色设定图,并排人工比对
+    const sc = (p.scenes || []).find((s) => s.id === shot.sceneId);
+    const names = new Set(
+      [...((sc && sc.cast) || []), shot.speaker].filter(Boolean),
+    );
+    refs = (p.characters || []).filter((c) => names.has(c.name) && c.refUrl);
+  }
   const el = document.createElement("div");
   el.className = "lightbox";
   el.innerHTML =
     kind === "video"
       ? `<video src="${url}" controls autoplay></video>`
       : `<img src="${url}">`;
+  if (refs.length) {
+    const side = document.createElement("div");
+    side.className = "lb-refs";
+    side.innerHTML = `<div class="lb-refs-t">角色一致性比对</div>${refs
+      .map(
+        (c) =>
+          `<figure><img src="${c.refUrl}"><figcaption>${esc(c.name)} 设定图</figcaption></figure>`,
+      )
+      .join("")}`;
+    el.appendChild(side);
+  }
   el.onclick = () => el.remove();
   document.body.appendChild(el);
 }
@@ -942,13 +963,16 @@ function flowPanelFor(n) {
   if (n.kind === "shot") return FlowUI.openPanel(n, shotPanel(n));
 }
 
+const CAMERAS = ["固定", "缓推", "拉远", "摇镜", "特写"];
+const EMOTIONS = ["平静", "严肃", "激动", "低沉", "惊讶", "悲伤"];
+
 function renderShotCard(sh) {
   const badge = (st, doneTxt) =>
     `<span class="badge ${st}">${st === "done" ? doneTxt : st === "pending" ? "生成中…" : st === "error" ? "失败" : st === "animatic" ? "动态漫" : "未生成"}</span>`;
   const media = sh.clipUrl
-    ? `<video src="${sh.clipUrl}" preload="metadata" data-act="preview" data-kind="video" data-url="${sh.clipUrl}"></video>`
+    ? `<video src="${sh.clipUrl}" preload="metadata" data-act="preview" data-kind="video" data-url="${sh.clipUrl}" data-idx="${sh.idx}" data-scene-id="${sh.sceneId}"></video>`
     : sh.panelUrl
-      ? `<img src="${sh.panelUrl}" loading="lazy" data-act="preview" data-kind="img" data-url="${sh.panelUrl}">`
+      ? `<img src="${sh.panelUrl}" loading="lazy" data-act="preview" data-kind="img" data-url="${sh.panelUrl}" data-idx="${sh.idx}" data-scene-id="${sh.sceneId}">`
       : `<div class="ph">🖼️<br><span style="font-size:12px">暂无分镜图</span></div>`;
   return `<div class="shot">
     <div class="visual-box">${media}
@@ -959,12 +983,19 @@ function renderShotCard(sh) {
     <div class="body">
       <div class="row1">
         <span class="tag">🎬 ${esc(sh.scene || "—")}</span>
-        <span class="tag">📷 ${esc(sh.camera || "固定")}</span>
+        <select class="mini-select" data-change="shot" data-idx="${sh.idx}" data-field="camera" title="运镜(动态漫引擎生效;AI 视频提示词已含)">
+          ${CAMERAS.map((c) => `<option ${c === (sh.camera || "固定") ? "selected" : ""}>${c}</option>`).join("")}
+        </select>
         <span class="tag">${sh.duration || 5}s</span>
         ${sh.audioUrl ? `<span class="tag" style="color:var(--ok)">🔊 ${esc(sh.speaker || "")}</span>` : sh.dialogue ? `<span class="tag">🗣 ${esc(sh.speaker || "旁白")}</span>` : ""}
       </div>
       <textarea class="visual" data-change="shot" data-idx="${sh.idx}" data-field="visual" rows="2">${esc(sh.visual)}</textarea>
-      <textarea class="dlg" data-change="shot" data-idx="${sh.idx}" data-field="dialogue" rows="1" placeholder="台词(可空)">${esc(sh.dialogue || "")}</textarea>
+      <div style="display:flex;gap:6px;align-items:center">
+        <textarea class="dlg" data-change="shot" data-idx="${sh.idx}" data-field="dialogue" rows="1" placeholder="台词(可空)" style="flex:1">${esc(sh.dialogue || "")}</textarea>
+        <select class="mini-select" data-change="shot" data-idx="${sh.idx}" data-field="emotion" title="台词情绪(配音韵律)">
+          ${EMOTIONS.map((m) => `<option ${m === (sh.emotion || "平静") ? "selected" : ""}>${m}</option>`).join("")}
+        </select>
+      </div>
       ${sh.error ? `<div class="err">${esc(sh.error)}</div>` : ""}
       <div class="ops">
         <button class="btn small" data-act="gen" data-stage="panels" data-shot-idx="${sh.idx}">🎨 ${sh.panelStatus === "done" ? "重绘" : "生成图"}</button>
@@ -1041,6 +1072,45 @@ function renderFilm() {
         : `<div class="panel-card" style="display:grid;place-items:center;min-height:300px;text-align:center;color:var(--dim);line-height:2">
           🎞️<br>还没有成片<br><button class="btn primary" data-act="gen" data-stage="film" ${shots.length ? "" : "disabled"}>合成成片</button></div>`
     }
+    <div class="panel-card">
+      <h3>🎵 BGM 背景音乐</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="file" id="bgm-file" accept="audio/*" style="flex:1;min-width:0;font-size:12px">
+        <button class="btn small" data-act="bgm-upload">⬆ 上传</button>
+        ${
+          p.bgmUrl
+            ? `<button class="btn small" data-act="preview" data-kind="video" data-url="${p.bgmUrl}">🔊 试听</button>
+        <button class="btn small" data-act="bgm-remove">✕ 移除</button>`
+            : ""
+        }
+      </div>
+      <div style="margin-top:8px;color:var(--dim);font-size:12px">${p.bgmUrl ? "已上传:重新合成时自动与配音混音(有台词自动压低,静默段恢复)" : "支持 mp3/wav/m4a/ogg,≤30MB;上传后合成成片时自动混音"}</div>
+      <div class="form-row" style="margin-top:10px">
+        <span style="flex:none">BGM 音量</span>
+        <input type="range" min="0" max="100" value="${p.bgmVolume == null ? 25 : p.bgmVolume}" data-change="bgmvol" style="flex:1">
+        <span id="bgm-vol-v" style="flex:none;width:36px;text-align:right">${p.bgmVolume == null ? 25 : p.bgmVolume}</span>
+      </div>
+    </div>
+    <div class="panel-card">
+      <h3>🎞 合成设置</h3>
+      <div class="form-row">
+        <span style="flex:none">转场</span>
+        <select data-change="project" data-field="transition" style="flex:1">
+          <option value="fade" ${(p.transition || "fade") === "fade" ? "selected" : ""}>淡入淡出(默认)</option>
+          <option value="none" ${p.transition === "none" ? "selected" : ""}>硬切</option>
+          <option value="black" ${p.transition === "black" ? "selected" : ""}>黑场过渡</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <span style="flex:none">字幕字号</span>
+        <select data-change="project" data-field="subSize" style="flex:1">
+          <option value="小" ${p.subSize === "小" ? "selected" : ""}>小</option>
+          <option value="中" ${p.subSize !== "小" && p.subSize !== "大" ? "selected" : ""}>中(默认)</option>
+          <option value="大" ${p.subSize === "大" ? "selected" : ""}>大</option>
+        </select>
+      </div>
+      <div style="color:var(--dim);font-size:12px;margin-top:6px">改动即时保存;重新「合成成片」后生效。</div>
+    </div>
     <div class="panel-card">
       <h3>成本与管线状态</h3>
       <table class="cost-table">
@@ -1708,8 +1778,35 @@ document.addEventListener("click", async (e) => {
     } else if (act === "stop") {
       await api(`/api/projects/${S.project.id}/stop`, "POST", {});
       toast("将在当前镜头完成后停止");
-    } else if (act === "preview") lightbox(el.dataset.kind, el.dataset.url);
-    else if (act === "flow-logs") {
+    } else if (act === "preview") {
+      const shot =
+        S.project &&
+        (S.project.shots || []).find(
+          (s) =>
+            String(s.idx) === el.dataset.idx &&
+            s.sceneId === el.dataset.sceneId,
+        );
+      lightbox(el.dataset.kind, el.dataset.url, shot);
+    } else if (act === "bgm-upload") {
+      const inp = document.getElementById("bgm-file");
+      const f = inp && inp.files && inp.files[0];
+      if (!f) return toast("请先选择音频文件", "err");
+      const ext = (f.name.split(".").pop() || "").toLowerCase();
+      toast("BGM 上传中…");
+      const r = await fetch(
+        `/api/projects/${S.project.id}/bgm?ext=${encodeURIComponent(ext)}`,
+        { method: "POST", body: f },
+      );
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      await refreshProject();
+      toast("BGM 已上传,合成成片时自动混音", "ok");
+    } else if (act === "bgm-remove") {
+      if (!confirm("确定移除 BGM?")) return;
+      await api(`/api/projects/${S.project.id}/bgm`, "DELETE");
+      await refreshProject();
+      toast("BGM 已移除", "ok");
+    } else if (act === "flow-logs") {
       FlowUI.openLogs(logsHtml());
     } else if (act === "flow-close-panel") {
       FlowUI.closePanel();
@@ -1789,6 +1886,12 @@ document.addEventListener("change", (e) => {
       );
       send({ scenes });
     }, 600);
+  } else if (kind === "project") {
+    send({ [el.dataset.field]: el.value });
+  } else if (kind === "bgmvol") {
+    const label = document.getElementById("bgm-vol-v");
+    if (label) label.textContent = el.value;
+    send({ bgmVolume: Number(el.value) });
   } else if (kind === "arc" || kind === "beat") {
     clearTimeout(debounces[kind + el.dataset.id + el.dataset.field]);
     debounces[kind + el.dataset.id + el.dataset.field] = setTimeout(() => {
