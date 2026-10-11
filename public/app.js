@@ -984,7 +984,7 @@ function renderShotCard(sh) {
       <div class="row1">
         <span class="tag">🎬 ${esc(sh.scene || "—")}</span>
         <select class="mini-select" data-change="shot" data-idx="${sh.idx}" data-field="camera" title="运镜(动态漫引擎生效;AI 视频提示词已含)">
-          ${CAMERAS.map((c) => `<option ${c === (sh.camera || "固定") ? "selected" : ""}>${c}</option>`).join("")}
+          ${CAMERAS.map((c) => `<option ${c === (sh.camera || "缓推") ? "selected" : ""}>${c}</option>`).join("")}
         </select>
         <span class="tag">${sh.duration || 5}s</span>
         ${sh.audioUrl ? `<span class="tag" style="color:var(--ok)">🔊 ${esc(sh.speaker || "")}</span>` : sh.dialogue ? `<span class="tag">🗣 ${esc(sh.speaker || "旁白")}</span>` : ""}

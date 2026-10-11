@@ -518,12 +518,12 @@ route(
       return send(res, 415, { error: '不支持的音频格式,仅限 mp3/wav/m4a/ogg' });
     const media = path.join(store.projectDir(p.id), 'media');
     const dest = path.join(media, `bgm.${ext}`);
-    // 换扩展名重传前清掉旧文件,避免多文件并存导致 project.bgm 指向失效
-    for (const e of BGM_EXTS)
-      fs.rmSync(path.join(media, `bgm.${e}`), { force: true });
     // content-length 预检:413 需在 readRawTo 销毁套接字之前送达;无此头的 chunked 上传仍由 util.readRawTo 兜底
     const cl = Number(req.headers['content-length'] || 0);
     if (cl > BGM_MAX) return send(res, 413, { error: '文件超过 30MB 上限' });
+    // 换扩展名重传前清掉旧文件,避免多文件并存导致 project.bgm 指向失效
+    for (const e of BGM_EXTS)
+      fs.rmSync(path.join(media, `bgm.${e}`), { force: true });
     try {
       await readRawTo(req, dest, BGM_MAX);
     } catch (e) {
