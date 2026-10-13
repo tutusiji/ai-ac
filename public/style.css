@@ -1445,3 +1445,147 @@ a {
   line-height: 1.9;
   color: var(--text);
 }
+
+/* ===== 工作台:左导航 + 全宽工作页 ===== */
+.wb-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  background: var(--bg);
+}
+#rail {
+  width: 96px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  background: var(--bg2);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+.rail-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 9px 4px 7px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--dim);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.rail-item:hover,
+.rail-item.on {
+  background: var(--card2);
+  color: var(--text);
+}
+.rail-item.on .rail-ico {
+  color: var(--accent);
+}
+.rail-ico {
+  font-size: 19px;
+  line-height: 1;
+}
+.rail-label {
+  white-space: nowrap;
+}
+.rail-dot {
+  position: absolute;
+  top: 7px;
+  right: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.rail-dot.ok {
+  background: var(--ok);
+}
+.rail-dot.run {
+  background: #4a9eff;
+  animation: fwPulse 1.2s ease-in-out infinite;
+}
+.rail-dot.err {
+  background: var(--err);
+}
+.rail-dot.warn {
+  background: var(--warn);
+}
+.rail-spacer {
+  flex: 1;
+}
+#page {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow-y: auto;
+}
+.workpage {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px 22px 70px;
+}
+.workpage .panel-card {
+  margin-bottom: 14px;
+}
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.page-head h2 {
+  font-size: 17px;
+  margin: 0;
+}
+.page-head .spacer {
+  flex: 1;
+}
+.sb-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+.sb-tab {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.sb-tab small {
+  color: var(--dim);
+  font-size: 11px;
+}
+.sb-tab.on {
+  border-color: var(--accent);
+}
+.shot-page .shot {
+  max-width: 640px;
+  margin: 0 auto;
+}
+@media (max-width: 900px) {
+  #rail {
+    width: 48px;
+    padding: 8px 5px;
+  }
+  .rail-label {
+    display: none;
+  }
+  .rail-dot {
+    right: 10px;
+  }
+}
