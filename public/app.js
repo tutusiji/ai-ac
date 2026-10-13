@@ -21,50 +21,25 @@ function uid(p) {
 }
 
 /* ---------- 前端路由:URL 即状态,刷新/直达/后退不丢位置 ---------- */
-/* 旧 tab URL → flow query(书签不失效) */
-const FLOW_TAB_MAP = {
-  story: "overlay=story",
-  shots: "view=shots",
-  chars: "sel=chars",
-  script: "sel=idea",
-  film: "sel=film",
-  logs: "drawer=logs",
-};
+const { parseFlowQuery, flowRouteTo, pageForNode } = window.FlowRoute;
 
 function applyFlowQuery(u) {
-  const q = u.searchParams;
+  const r = parseFlowQuery(u.searchParams);
   S.flow = {
-    view: q.get("view") === "shots" ? "shots" : "overview",
-    sel: q.get("sel") || "",
-    scene: q.get("scene") || "",
-    overlay: q.get("overlay") === "story" ? "story" : "",
-    drawer: q.get("drawer") === "logs" ? "logs" : "",
+    page: r.page,
+    view: r.view,
+    scene: r.scene,
+    shot: r.shot,
+    sel: r.page === "canvas" ? r.sel : "",
   };
-  if (S.flow.scene)
-    S.sceneId = S.flow.scene; /* 兼容仍读 S.sceneId 的生成兜底 */
+  if (r.scene) S.sceneId = r.scene; /* 兼容仍读 S.sceneId 的生成兜底 */
+  /* 过渡桥:旧宿主 syncHosts 仍读 overlay/drawer;T4 删桥 */
+  S.flow.overlay = r.page === "story" ? "story" : "";
+  S.flow.drawer = r.logsHint ? "logs" : "";
 }
 
-function flowUrl(over = {}) {
-  const f = {
-    view: "overview",
-    sel: "",
-    scene: "",
-    overlay: "",
-    drawer: "",
-    ...(S.flow || {}),
-    ...over,
-  };
-  const q = new URLSearchParams();
-  if (f.view === "shots") q.set("view", "shots");
-  if (f.sel) q.set("sel", f.sel);
-  if (f.scene && f.view === "shots") q.set("scene", f.scene);
-  if (f.overlay) q.set("overlay", f.overlay);
-  if (f.drawer) q.set("drawer", f.drawer);
-  const qs = q.toString();
-  return "/project/" + S.project.id + (qs ? "?" + qs : "");
-}
 function flowNav(over = {}) {
-  navigate(flowUrl(over));
+  navigate(flowRouteTo(S.project.id, { ...S.flow, ...over }));
 }
 function navigate(path) {
   if (location.pathname + location.search !== path)
@@ -88,15 +63,6 @@ async function handleRoute() {
     return render();
   }
   const pid = seg[1];
-  /* 旧 tab 路径一次性重定向到等价 flow 视图(书签不失效) */
-  if (seg[2] && FLOW_TAB_MAP[seg[2]]) {
-    history.replaceState(
-      {},
-      "",
-      "/project/" + pid + "?" + FLOW_TAB_MAP[seg[2]],
-    );
-    return handleRoute();
-  }
   if (seg[2])
     history.replaceState({}, "", "/project/" + pid); /* 未知路径回落总览 */
   applyFlowQuery(u);
@@ -111,8 +77,8 @@ async function handleRoute() {
       !(S.project.shots || []).length &&
       !((S.project.story || {}).arcs || []).length;
     if (!location.search && bare) {
-      /* 反抽卡:全新项目直接进脉络工作室 */
-      history.replaceState({}, "", flowUrl({ overlay: "story" }));
+      /* 反抽卡:全新项目直接进脉络页 */
+      history.replaceState({}, "", flowRouteTo(pid, { page: "story" }));
       applyFlowQuery(new URL(location.href));
       syncHosts();
     }
@@ -516,7 +482,7 @@ function renderLight() {
       FlowUI.closePanel();
       Flow.select(null);
       S.flow.sel = "";
-      history.replaceState({}, "", flowUrl({ sel: "" }));
+      history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
     }
   }
   syncHosts(true);
@@ -561,9 +527,9 @@ function nextStepOf(p) {
     chars = p.characters || [];
   const story = p.story || {};
   const goto = (t) => () => {
-    if (t === "script") return flowNav({ view: "overview", sel: "idea" });
+    if (t === "script") return flowNav({ page: "script" });
     if (t === "shots") return flowNav({ view: "shots" });
-    flowNav({ overlay: "story" });
+    flowNav({ page: "story" });
   };
   if (!p.script && !story.premise)
     return {
@@ -734,19 +700,19 @@ function onNodeSelect(id) {
     FlowUI.closePanel();
     Flow.select(null);
     S.flow.sel = "";
-    history.replaceState({}, "", flowUrl({ sel: "" }));
+    history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
     return;
   }
   const n = (S._graph.nodes || []).find((x) => x.id === id);
   if (!n) return; /* 未知 id(如已删除的镜头)静默忽略 */
   S.flow.sel = id;
-  history.replaceState({}, "", flowUrl({ sel: id }));
+  history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
   flowPanelFor(n);
 }
 
 function onNodeOpen(id) {
   if (id === "story") {
-    flowNav({ overlay: "story" });
+    flowNav({ page: "story" });
     return;
   }
   if (id.startsWith("scene:")) {
@@ -1281,9 +1247,10 @@ document.addEventListener("click", async (e) => {
       );
       await openProject(p.id);
       navigate(
-        "/project/" +
-          p.id +
-          (body.autostart ? "?view=shots" : "?overlay=story"),
+        flowRouteTo(p.id, {
+          page: body.autostart ? "canvas" : "story",
+          view: body.autostart ? "shots" : "overview",
+        }),
       );
     } else if (act === "open-settings") settingsModal();
     else if (act === "why-ark") whyArkModal();
@@ -1583,7 +1550,7 @@ document.addEventListener("click", async (e) => {
       S.draft = null;
       closeModal();
       toast("已采纳写入", "ok");
-      flowNav({ overlay: "story" });
+      flowNav({ page: "story" });
     } else if (act === "add-arc") {
       const nid = uid("arc");
       const arcs = (S.project.story.arcs || []).concat([
@@ -1808,26 +1775,17 @@ document.addEventListener("click", async (e) => {
       toast("BGM 已移除", "ok");
     } else if (act === "flow-logs") {
       FlowUI.openLogs(logsHtml());
-    } else if (act === "flow-close-panel") {
-      FlowUI.closePanel();
-      Flow.select(null);
-      S.flow.sel = "";
-      history.replaceState({}, "", flowUrl({ sel: "" }));
-    } else if (act === "flow-close-overlay") {
-      FlowUI.closeOverlay();
-      S.flow.overlay = "";
-      history.replaceState({}, "", flowUrl({ overlay: "" }));
     } else if (act === "flow-close-logs") {
       FlowUI.closeLogs();
       S.flow.drawer = "";
-      history.replaceState({}, "", flowUrl({ drawer: "" }));
+      history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
     } else if (act === "flow-fullscreen") {
       FlowUI.toggleFullscreen();
     } else if (act === "flow-reset-layout") {
       Flow.resetLayout();
       toast("画布布局已重置", "ok");
     } else if (act === "flow-open-story") {
-      flowNav({ overlay: "story" });
+      flowNav({ page: "story" });
     } else if (act === "flow-sel-shot") {
       const nid =
         "shot:" +
@@ -1924,9 +1882,9 @@ document.addEventListener("keydown", (e) => {
       Flow.select(null);
       S.flow.sel = "";
     } else if (closedHost === "overlay") S.flow.overlay = "";
-    else if (closedHost === "overlay") S.flow.overlay = "";
     else if (closedHost === "logs") S.flow.drawer = "";
-    if (closedHost) history.replaceState({}, "", flowUrl({}));
+    if (closedHost)
+      history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
     return;
   }
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -1963,7 +1921,7 @@ document.addEventListener("keydown", (e) => {
   }
   if (S.view === "project" && S.project) {
     if (e.key === "1") {
-      flowNav({ view: "overview", sel: "" });
+      flowNav({ page: "canvas" });
       return;
     }
     if (e.key === "2") {
