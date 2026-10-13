@@ -1,7 +1,7 @@
 "use strict";
 /* flow.js — 画布引擎与宿主(零依赖):
    视口(平移/缩放/节点拖拽)+ SVG bezier 连线 + 节点渲染与 SSE 局部补丁
-   + 详情面板 / 全屏浮层 / 日志抽屉 / 真全屏切换。
+   + 日志抽屉 / 真全屏切换。
    依赖 flow-graph.js 的全局绑定(buildGraph/zoomAt/FG);toast 在点击时才调用。 */
 
 const Flow = (() => {
@@ -311,22 +311,6 @@ const Flow = (() => {
 })();
 
 const FlowUI = {
-  openPanel(node, html) {
-    const d = document.getElementById("fw-drawer");
-    if (!d) return;
-    d.querySelector(".fw-drawer-title").textContent = node ? (node.icon ? node.icon + " " : "") + node.title : "";
-    d.querySelector(".fw-drawer-body").innerHTML = html;
-    d.classList.add("open");
-  },
-  closePanel() { const d = document.getElementById("fw-drawer"); if (d) d.classList.remove("open"); },
-  openOverlay(title, html) {
-    const o = document.getElementById("fw-overlay");
-    if (!o) return;
-    o.querySelector(".fw-overlay-title").textContent = title;
-    o.querySelector(".fw-overlay-body").innerHTML = html;
-    o.classList.add("open");
-  },
-  closeOverlay() { const o = document.getElementById("fw-overlay"); if (o) o.classList.remove("open"); },
   openLogs(html) {
     const l = document.getElementById("fw-logs");
     if (!l) return;
@@ -336,13 +320,6 @@ const FlowUI = {
     b.scrollTop = b.scrollHeight;
   },
   closeLogs() { const l = document.getElementById("fw-logs"); if (l) l.classList.remove("open"); },
-  closeTop() {
-    const ov = document.getElementById("fw-overlay"), d = document.getElementById("fw-drawer"), l = document.getElementById("fw-logs");
-    if (ov && ov.classList.contains("open")) { FlowUI.closeOverlay(); return "overlay"; }
-    if (d && d.classList.contains("open")) { FlowUI.closePanel(); return "panel"; }
-    if (l && l.classList.contains("open")) { FlowUI.closeLogs(); return "logs"; }
-    return null;
-  },
   async toggleFullscreen() {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();

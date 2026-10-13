@@ -481,6 +481,7 @@ function renderLight() {
       Flow.select(null);
       history.replaceState({}, "", flowRouteTo(p.id, S.flow));
     }
+    updateCtxbar();
     return;
   }
   S._syncSeq = (S._syncSeq || 0) + 1;
@@ -834,33 +835,55 @@ function mountFlow() {
   rebuildGraph(true);
 }
 
-/* 节点交互:单击选中开面板;双击 story→脉络浮层、scene→镜头图,其余与单击相同 */
+/* 节点交互:单击仅选中(底部上下文条),双击进对应工作页(spec §5.1/§10) */
 function onNodeSelect(id) {
-  if (!id) {
-    /* 点空白:收面板并清选中(spec §6) */
-    FlowUI.closePanel();
-    Flow.select(null);
-    S.flow.sel = "";
-    history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
-    return;
-  }
-  const n = (S._graph.nodes || []).find((x) => x.id === id);
-  if (!n) return; /* 未知 id(如已删除的镜头)静默忽略 */
-  S.flow.sel = id;
+  S.flow.sel = id || "";
+  updateCtxbar();
+  if (S.flow.page !== "canvas") return; /* 非画布页不写选中态 */
   history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
-  flowPanelFor(n);
 }
 
 function onNodeOpen(id) {
-  if (id === "story") {
-    flowNav({ page: "story" });
+  const n = (S._graph.nodes || []).find((x) => x.id === id);
+  if (!n) return;
+  if (n.kind === "scene") {
+    /* spec §10:双击 scene 保留画布内镜头层视图;进分镜页走上下文条 */
+    flowNav({ view: "shots", scene: n.sceneId, sel: "" });
     return;
   }
-  if (id.startsWith("scene:")) {
-    flowNav({ view: "shots", scene: id.slice(6) });
+  const t = pageForNode(n);
+  if (t) flowNav({ ...t, shot: t.shot || 0, sel: "" });
+}
+
+function statusWord(n) {
+  return (
+    {
+      pending: "待处理",
+      run: "生成中",
+      done: "已完成",
+      error: "出错",
+      skip: "已跳过",
+    }[n.status] || ""
+  );
+}
+
+function updateCtxbar() {
+  const bar = document.getElementById("fw-ctxbar");
+  if (!bar) return;
+  const n = S.flow.sel
+    ? (S._graph.nodes || []).find((x) => x.id === S.flow.sel)
+    : null;
+  if (!n) {
+    bar.hidden = true;
+    bar.innerHTML = "";
     return;
   }
-  onNodeSelect(id);
+  const tgt = pageForNode(n);
+  bar.innerHTML = `<span class="rail-ico">${n.icon || "🎬"}</span>
+    <b>${esc(n.title || (n.kind === "shot" ? "第 " + n.idx + " 镜" : ""))}</b>
+    <span class="hint">${statusWord(n)}</span>
+    ${tgt ? '<button class="fw-btn primary" data-act="ctx-open">打开 →</button>' : ""}`;
+  bar.hidden = false;
 }
 
 function rebuildGraph(fit) {
@@ -873,35 +896,9 @@ function rebuildGraph(fit) {
   }
   Flow.setGraph(S._graph);
   if (fit) Flow.fit();
-  if (S.flow.sel) {
-    const n = (S._graph.nodes || []).find((x) => x.id === S.flow.sel);
-    if (n) {
-      Flow.select(n.id);
-      flowPanelFor(n);
-    }
-  }
-}
-
-function shotPanel(n) {
-  const p = S.project;
-  const sh = (p.shots || []).find(
-    (s) => s.idx === n.idx && s.sceneId === n.sceneId,
-  );
-  const sc = (p.scenes || []).find((s) => s.id === n.sceneId);
-  const siblings = (p.shots || [])
-    .filter((s) => s.sceneId === n.sceneId)
-    .map((s) => s.idx)
-    .sort((a, b) => a - b);
-  const i = siblings.indexOf(n.idx);
-  const prev = siblings[i - 1],
-    next = siblings[i + 1];
-  return `<div class="hint" style="margin-bottom:10px">场景:${esc(sc ? sc.title : n.sceneId)}${sc && sc.locked ? " 🔒" : ""}</div>
-    ${sh ? renderShotCard(sh) : '<div class="empty">该镜头不存在(可能已被删除)</div>'}
-    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-      ${prev ? `<button class="btn small" data-act="flow-sel-shot" data-scene-id="${n.sceneId}" data-idx="${prev}">← 第 ${prev} 镜</button>` : "<span></span>"}
-      <span style="flex:1"></span>
-      ${next ? `<button class="btn small" data-act="flow-sel-shot" data-scene-id="${n.sceneId}" data-idx="${next}">第 ${next} 镜 →</button>` : ""}
-    </div>`;
+  if (S.flow.sel && (S._graph.nodes || []).some((x) => x.id === S.flow.sel))
+    Flow.select(S.flow.sel);
+  updateCtxbar();
 }
 
 function scenePanel(n) {
@@ -928,33 +925,6 @@ function scenePanel(n) {
         ? `<div class="shots-grid" style="margin-top:12px">${list.map(renderShotCard).join("")}</div>`
         : '<div class="empty" style="margin-top:12px">该场景还没有分镜,点上面「AI 生成本场景分镜」。</div>'
     }`;
-}
-
-function storyPanel() {
-  const p = S.project;
-  const scenes = p.scenes || [];
-  return `<div class="panel-card"><h3>脉络进度</h3>
-    ${
-      scenes.length
-        ? scenes
-            .map((sc) => {
-              const st = sc.stats || {};
-              const has = (st.shots || 0) > 0;
-              return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
-        <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sc.title)}${sc.locked ? " 🔒" : ""}</b>
-        <span class="hint">${has ? `分镜${st.shots} · 图${st.panels || 0}/${st.shots} · 片${st.clips || 0}/${st.shots}` : "未展开"}</span>
-        ${
-          has
-            ? `<button class="btn small" data-act="goto-scene" data-scene-id="${sc.id}">查看镜头 ›</button>`
-            : `<button class="btn small" data-act="gen" data-stage="sceneShots" data-scene-id="${sc.id}">🪄 生成分镜</button>`
-        }
-      </div>`;
-            })
-            .join("")
-        : '<div class="empty">还没有场景:先打开脉络工作室,把节拍拆成场景。</div>'
-    }
-    <div style="margin-top:12px"><button class="btn primary" data-act="flow-open-story">🧭 打开脉络工作室</button></div>
-  </div>`;
 }
 
 function panelsPanel() {
@@ -1039,19 +1009,6 @@ function coverPanel() {
         <button class="btn primary" data-act="gen" data-stage="cover">生成封面</button>
         <div class="hint" style="margin-top:8px">1080×1440 竖版海报,首页卡片与成片页下载都会用到,可随时重roll。</div>
       </div>`;
-}
-
-function flowPanelFor(n) {
-  if (n.id === "idea") return FlowUI.openPanel(n, renderScript());
-  if (n.id === "chars") return FlowUI.openPanel(n, renderChars());
-  if (n.id === "film") return FlowUI.openPanel(n, renderFilm());
-  if (n.id === "story") return FlowUI.openPanel(n, storyPanel());
-  if (n.id === "panels") return FlowUI.openPanel(n, panelsPanel());
-  if (n.id === "clips") return FlowUI.openPanel(n, clipsPanel());
-  if (n.id === "voice") return FlowUI.openPanel(n, voicePanel());
-  if (n.id === "cover") return FlowUI.openPanel(n, coverPanel());
-  if (n.kind === "scene") return FlowUI.openPanel(n, scenePanel(n));
-  if (n.kind === "shot") return FlowUI.openPanel(n, shotPanel(n));
 }
 
 const CAMERAS = ["固定", "缓推", "拉远", "摇镜", "特写"];
@@ -1911,13 +1868,10 @@ document.addEventListener("click", async (e) => {
       toast("画布布局已重置", "ok");
     } else if (act === "flow-open-story") {
       flowNav({ page: "story" });
-    } else if (act === "flow-sel-shot") {
-      const nid =
-        "shot:" +
-        (el.dataset.sceneId || S.flow.scene) +
-        ":" +
-        Number(el.dataset.idx);
-      if ((S._graph.nodes || []).some((x) => x.id === nid)) onNodeSelect(nid);
+    } else if (act === "ctx-open") {
+      const n = (S._graph.nodes || []).find((x) => x.id === S.flow.sel);
+      const t = n && pageForNode(n);
+      if (t) flowNav({ ...t, shot: t.shot || 0, sel: "" });
     }
   } catch (err) {
     toast(err.message + (err.hint ? " — " + err.hint : ""), "err");
