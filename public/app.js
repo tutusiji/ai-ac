@@ -33,9 +33,7 @@ function applyFlowQuery(u) {
     sel: r.page === "canvas" ? r.sel : "",
   };
   if (r.scene) S.sceneId = r.scene; /* 兼容仍读 S.sceneId 的生成兜底 */
-  /* 过渡桥:旧宿主 syncHosts 仍读 overlay/drawer;T4 删桥 */
-  S.flow.overlay = r.page === "story" ? "story" : "";
-  S.flow.drawer = r.logsHint ? "logs" : "";
+  if (r.logsHint) S._logsHint = true; /* 宿主 renderProject 一次性开日志抽屉 */
 }
 
 function flowNav(over = {}) {
@@ -68,7 +66,10 @@ async function handleRoute() {
   applyFlowQuery(u);
   if (S.project && S.project.id === pid) {
     S.view = "project";
-    render();
+    if (document.getElementById("rail")) {
+      syncRail(S.project);
+      renderCurrentPage();
+    } else render();
     return;
   }
   try {
@@ -80,7 +81,8 @@ async function handleRoute() {
       /* 反抽卡:全新项目直接进脉络页 */
       history.replaceState({}, "", flowRouteTo(pid, { page: "story" }));
       applyFlowQuery(new URL(location.href));
-      syncHosts();
+      syncRail(S.project);
+      renderCurrentPage();
     }
   } catch (e) {
     toast("项目不存在或已删除,回到首页", "err");
@@ -455,37 +457,34 @@ function render(light) {
   renderLight();
 }
 
-/* SSE 高频路径:补丁画布 + 刷工具条 + 跟随宿主,不重建壳 */
+/* SSE 高频路径:状态灯必更;画布页补丁;其余页按守卫重渲 */
 function renderLight() {
   const p = S.project;
   S._ns = nextStepOf(p);
   updateToolbar();
-  try {
-    S._graph = buildGraph(p, S.settings, S.flow.view);
-    Flow.patch(S._graph);
-  } catch (e) {
-    console.error("buildGraph failed", e);
-    toast("画布构图异常:" + e.message + ",可点工具条 🧹 重置布局", "err");
+  syncRail(p);
+  if (S.flow.page === "canvas") {
+    try {
+      S._graph = buildGraph(p, S.settings, S.flow.view);
+      Flow.patch(S._graph);
+    } catch (e) {
+      console.error("buildGraph failed", e);
+      toast("画布构图异常:" + e.message + ",可点工具条 🧹 重置布局", "err");
+      return;
+    }
+    if (
+      S.flow.sel &&
+      !(S._graph.nodes || []).some((x) => x.id === S.flow.sel)
+    ) {
+      /* 选中节点已被删除:清选中与 URL 参数(人工冒烟第 6 条) */
+      S.flow.sel = "";
+      Flow.select(null);
+      history.replaceState({}, "", flowRouteTo(p.id, S.flow));
+    }
     return;
   }
-  const drawer = document.getElementById("fw-drawer");
-  const editing =
-    drawer &&
-    drawer.contains(document.activeElement) &&
-    document.activeElement.matches("input, textarea, select");
-  if (S.flow.sel) {
-    const n = (S._graph.nodes || []).find((x) => x.id === S.flow.sel);
-    if (n) {
-      if (!editing) flowPanelFor(n);
-    } else {
-      /* 选中节点已被删除:收面板并清 URL 参数 */
-      FlowUI.closePanel();
-      Flow.select(null);
-      S.flow.sel = "";
-      history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
-    }
-  }
-  syncHosts(true);
+  S._syncSeq = (S._syncSeq || 0) + 1;
+  refreshCurrentPage();
 }
 
 function renderHome() {
@@ -614,7 +613,7 @@ function nextStepOf(p) {
   };
 }
 
-/* ---------- 渲染:项目(全屏画布壳) ---------- */
+/* ---------- 渲染:项目(工作台壳) ---------- */
 const FLOW_STAGE_LABELS = {
   storyboard: "分镜脚本",
   sceneShots: "场景分镜",
@@ -626,16 +625,161 @@ const FLOW_STAGE_LABELS = {
   cover: "封面",
 };
 
+/* ---------- 工作台:左导航(状态灯取数见 spec §3) ---------- */
+const RAIL_PAGES = [
+  { page: "canvas", icon: "🗺", label: "画布" },
+  { page: "script", icon: "📜", label: "剧本" },
+  { page: "chars", icon: "👥", label: "角色" },
+  { page: "storyboard", icon: "🎞", label: "分镜" },
+  { page: "clips", icon: "🎬", label: "片段" },
+  { page: "voice", icon: "🎙", label: "配音" },
+  { page: "film", icon: "🎞", label: "成片" },
+  { page: "cover", icon: "🖼", label: "封面" },
+];
+
+function stageLight(statuses, total) {
+  if (!total) return "none";
+  const st = statuses.filter(Boolean);
+  if (st.includes("error")) return "err";
+  if (st.includes("pending") || st.includes("run")) return "run";
+  return st.length === total && st.every((s) => s === "done") ? "ok" : "warn";
+}
+
+function railLight(page, p) {
+  const shots = p.shots || [];
+  if (page === "script") {
+    if (p.running === "storyboard")
+      return "run"; /* 分镜脚本(含故事骨架)生成中 */
+    if (p.lastError) return "err";
+    return ((p.story || {}).arcs || []).length ? "ok" : "none";
+  }
+  if (page === "chars") {
+    const cs = p.characters || [];
+    return cs.length ? (cs.some((c) => !c.refUrl) ? "warn" : "ok") : "none";
+  }
+  if (page === "storyboard") {
+    return stageLight(
+      shots.map((s) => s.panelStatus),
+      shots.length,
+    );
+  }
+  if (page === "clips") {
+    return stageLight(
+      shots.map((s) => s.clipStatus),
+      shots.length,
+    );
+  }
+  if (page === "voice") {
+    if (!shots.length) return "none";
+    if (shots.some((s) => s.voiceStatus === "pending")) return "run";
+    return shots.some((s) => (s.dialogue || "").trim() && !s.audioUrl)
+      ? "warn"
+      : "ok";
+  }
+  if (page === "film") {
+    if (p.filmUrl) return "ok";
+    if (p.running === "film") return "run";
+    if (p.lastError) return "err";
+    return "none";
+  }
+  if (page === "cover") {
+    if (p.coverImageUrl) return "ok";
+    if (p.running === "cover") return "run";
+    return "none";
+  }
+  return ""; /* canvas 无灯 */
+}
+
+function railHtml(p) {
+  const items = RAIL_PAGES.map(
+    (r) => `
+    <button class="rail-item ${S.flow.page === r.page ? "on" : ""}" data-act="rail-go" data-page="${r.page}" title="${r.label}">
+      <span class="rail-ico">${r.icon}</span><span class="rail-label">${r.label}</span>
+      ${r.page === "canvas" ? "" : `<i class="rail-dot ${railLight(r.page, p)}" data-light="${r.page}"></i>`}
+    </button>`,
+  ).join("");
+  return (
+    items +
+    `<div class="rail-spacer"></div>
+    <button class="rail-item" data-act="open-settings" title="设置"><span class="rail-ico">⚙</span><span class="rail-label">设置</span></button>
+    <button class="rail-item" data-act="flow-logs" title="执行日志"><span class="rail-ico">📜</span><span class="rail-label">日志</span></button>
+    <button class="rail-item" data-act="flow-fullscreen" title="浏览器全屏"><span class="rail-ico">⛶</span><span class="rail-label">全屏</span></button>`
+  );
+}
+
+/* SSE 每次同步调用:只改 class,不重建 rail DOM */
+function syncRail(p) {
+  for (const r of RAIL_PAGES) {
+    const dot = document.querySelector(`.rail-dot[data-light="${r.page}"]`);
+    if (dot) dot.className = "rail-dot " + railLight(r.page, p);
+  }
+  document
+    .querySelectorAll("#rail .rail-item[data-page]")
+    .forEach((b) => b.classList.toggle("on", b.dataset.page === S.flow.page));
+}
+
 function renderProject() {
   const p = S.project;
   S._ns = nextStepOf(p);
   app().innerHTML = `
-  <div class="flow-shell">
-    <div class="fw-toolbar" id="fw-toolbar">${toolbarHtml(p)}</div>
+  <div class="wb-shell">
+    <nav id="rail" aria-label="工作台导航">${railHtml(p)}</nav>
+    <main id="page"></main>
+  </div>`;
+  if (S._logsHint) {
+    S._logsHint = false;
+    FlowUI.openLogs(logsHtml());
+  }
+  renderCurrentPage();
+}
+
+/* 九页分派;整块替换只发生在页面切换时(spec §6.5) */
+const FORM_PAGES = ["script", "chars", "film", "cover", "story"];
+
+function renderCurrentPage() {
+  const host = $("#page");
+  if (!host) return;
+  S._pageSeq = S._syncSeq || 0;
+  const f = S.flow;
+  if (f.page === "canvas") return renderCanvasPage();
+  let html = "";
+  if (f.page === "script") html = renderScript();
+  else if (f.page === "chars") html = renderChars();
+  else if (f.page === "storyboard")
+    html = f.shot ? "" : panelsPanel(); /* 过渡:真分镜页在 T5 落地 */
+  else if (f.page === "clips") html = clipsPanel();
+  else if (f.page === "voice") html = voicePanel();
+  else if (f.page === "film") html = renderFilm();
+  else if (f.page === "cover") html = coverPanel();
+  else if (f.page === "story") html = renderStory();
+  host.innerHTML = `<div class="workpage">${html}</div>`;
+  host.scrollTop = 0;
+}
+
+/* SSE 增量:表单页焦点中或数据未变 → 跳过整块重渲(spec §6.3) */
+function refreshCurrentPage() {
+  const host = $("#page");
+  if (!host) return;
+  const editing =
+    host.contains(document.activeElement) &&
+    document.activeElement.matches("input, textarea, select");
+  const formish =
+    FORM_PAGES.includes(S.flow.page) ||
+    (S.flow.page === "storyboard" && S.flow.shot);
+  if (formish && (editing || S._pageSeq === S._syncSeq)) return;
+  renderCurrentPage();
+}
+
+function renderCanvasPage() {
+  const host = $("#page");
+  if (!host) return;
+  host.innerHTML = `
+  <div class="flow-canvas">
+    <div class="fw-toolbar" id="fw-toolbar">${toolbarHtml(S.project)}</div>
     <div id="flow-root"></div>
+    <div id="fw-ctxbar" hidden></div>
   </div>`;
   mountFlow();
-  syncHosts();
 }
 
 function toolbarHtml(p) {
@@ -663,10 +807,7 @@ function toolbarHtml(p) {
     <button class="fw-btn" data-act="undo" ${canUndo ? "" : "disabled"} title="撤销:${esc((p.history && p.history.last) || "无")}">↶</button>
     <button class="fw-btn" data-act="redo" ${canRedo ? "" : "disabled"} title="重做">↷</button>
     <span class="fw-chip fw-conn" id="fw-conn" hidden>重连中…</span>
-    <button class="fw-btn" data-act="flow-logs" title="执行日志">📜</button>
-    <button class="fw-btn" data-act="open-settings" title="设置">⚙</button>
-    <button class="fw-btn" data-act="flow-reset-layout" title="重置画布布局">🧹</button>
-    <button class="fw-btn" data-act="flow-fullscreen" title="浏览器全屏">⛶</button>`;
+    <button class="fw-btn" data-act="flow-reset-layout" title="重置画布布局">🧹</button>`;
 }
 function updateToolbar() {
   const el = $("#fw-toolbar");
@@ -739,22 +880,6 @@ function rebuildGraph(fit) {
       flowPanelFor(n);
     }
   }
-}
-
-/* URL 里的 overlay/drawer 落到宿主(Task 9 精修脉络浮层) */
-function syncHosts(light) {
-  const ov = document.getElementById("fw-overlay");
-  const ovOpen = !!(ov && ov.classList.contains("open"));
-  if (S.flow.overlay === "story") {
-    /* 浮层内正在输入时跳过重填,防丢字 */
-    const typing =
-      ovOpen &&
-      ov.contains(document.activeElement) &&
-      document.activeElement.matches("input, textarea");
-    if (!light || !ovOpen || !typing)
-      FlowUI.openOverlay("🧭 脉络工作室", renderStory());
-  } else if (ovOpen) FlowUI.closeOverlay();
-  if (S.flow.drawer === "logs") FlowUI.openLogs(logsHtml());
 }
 
 function shotPanel(n) {
@@ -1253,7 +1378,9 @@ document.addEventListener("click", async (e) => {
         }),
       );
     } else if (act === "open-settings") settingsModal();
-    else if (act === "why-ark") whyArkModal();
+    else if (act === "rail-go") {
+      flowNav({ page: el.dataset.page, shot: 0, sel: "" });
+    } else if (act === "why-ark") whyArkModal();
     else if (act === "set-prov") {
       S.settings[el.dataset.cap + "Provider"] = el.dataset.v;
       settingsModal();
@@ -1777,8 +1904,6 @@ document.addEventListener("click", async (e) => {
       FlowUI.openLogs(logsHtml());
     } else if (act === "flow-close-logs") {
       FlowUI.closeLogs();
-      S.flow.drawer = "";
-      history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
     } else if (act === "flow-fullscreen") {
       FlowUI.toggleFullscreen();
     } else if (act === "flow-reset-layout") {
@@ -1876,15 +2001,21 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeModal();
     closePalette();
-    const closedHost =
-      S.view === "project" && S.flow ? FlowUI.closeTop() : null;
-    if (closedHost === "panel") {
+    if (S.view !== "project" || !S.flow) return;
+    const l = document.getElementById("fw-logs");
+    if (l && l.classList.contains("open")) {
+      FlowUI.closeLogs();
+      return; /* 日志抽屉不占页栈:单独收起 */
+    }
+    if (S.flow.page === "storyboard" && S.flow.shot) {
+      flowNav({ shot: 0 }); /* 镜头页 → 分镜页 */
+    } else if (S.flow.page !== "canvas") {
+      flowNav({ page: "canvas" }); /* 其余页 → 画布 */
+    } else if (S.flow.sel) {
       Flow.select(null);
       S.flow.sel = "";
-    } else if (closedHost === "overlay") S.flow.overlay = "";
-    else if (closedHost === "logs") S.flow.drawer = "";
-    if (closedHost)
       history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
+    }
     return;
   }
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -1898,7 +2029,7 @@ document.addEventListener("keydown", (e) => {
       S.view === "project" &&
       S.project &&
       S.flow &&
-      S.flow.overlay === "story"
+      S.flow.page === "story"
     ) {
       if (k === "z" && !e.shiftKey) {
         e.preventDefault();
