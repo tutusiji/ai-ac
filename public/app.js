@@ -452,8 +452,9 @@ function render(light) {
       : "漫剧工坊 · Manju Studio";
   document.body.classList.toggle("flow-mode", S.view === "project");
   if (S.view === "home") return renderHome();
-  if (!light || !S._graph)
-    return renderProject(); /* 首次/换项目/换层级仍走全量 */
+  if (!light || !document.getElementById("rail"))
+    return renderProject(); /* 壳未建(首启/换项目)走全量;_graph 只在画布路径构建,不能作壳信号,
+       否则直落非画布页时每个 SSE tick 全量重渲,打碎 refreshCurrentPage 的表单守卫 */
   renderLight();
 }
 
@@ -528,7 +529,7 @@ function nextStepOf(p) {
   const story = p.story || {};
   const goto = (t) => () => {
     if (t === "script") return flowNav({ page: "script" });
-    if (t === "shots") return flowNav({ view: "shots" });
+    if (t === "shots") return flowNav({ page: "canvas", view: "shots" });
     flowNav({ page: "story" });
   };
   if (!p.script && !story.premise)
@@ -552,7 +553,7 @@ function nextStepOf(p) {
     return {
       text: `为「${empty.title}」生成分镜(纯文本,免费)`,
       btn: "去生成",
-      go: () => flowNav({ view: "shots", scene: empty.id }),
+      go: () => flowNav({ page: "canvas", view: "shots", scene: empty.id }),
     };
   if (chars.some((c) => !c.refImage))
     return {
@@ -565,7 +566,8 @@ function nextStepOf(p) {
     return {
       text: `为第 ${noPanel.idx} 镜生成画面(套餐内 0 现金)`,
       btn: "去生成",
-      go: () => flowNav({ view: "shots", scene: noPanel.sceneId }),
+      go: () =>
+        flowNav({ page: "canvas", view: "shots", scene: noPanel.sceneId }),
       gen: { stage: "panels", body: { shotIdx: noPanel.idx } },
     };
   if (!scenes.some((s) => s.locked))
@@ -2075,7 +2077,8 @@ document.addEventListener("keydown", (e) => {
       return;
     }
     if (e.key === "2") {
-      flowNav({ view: "shots" });
+      /* 切层仅在画布页有意义;非画布页不空转改 URL */
+      if (S.flow.page === "canvas") flowNav({ view: "shots" });
       return;
     }
     if (e.key === "u") {
