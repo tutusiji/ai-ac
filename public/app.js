@@ -15,6 +15,8 @@ const S = {
   sse: null,
   pollTimer: null,
   fetchTimer: null,
+  /* 首页直启时未过 applyFlowQuery 的兜底态(与 parseFlowQuery 空参默认一致);进项目即被覆写 */
+  flow: { page: "canvas", view: "overview", scene: "", shot: 0, sel: "" },
 };
 function uid(p) {
   return p + "_" + Math.random().toString(36).slice(2, 9);
@@ -2100,8 +2102,11 @@ function paletteItems() {
     items.push({
       label: S.flow.view === "overview" ? "🖼 切换到镜头图" : "🗺 切换到总览",
       hint: "1/2",
-      run: () =>
-        flowNav({ view: S.flow.view === "overview" ? "shots" : "overview" }),
+      run: () => {
+        /* 同键 2:切层仅在画布页有意义,非画布页不空转改 URL */
+        if (S.flow.page === "canvas")
+          flowNav({ view: S.flow.view === "overview" ? "shots" : "overview" });
+      },
     });
     items.push({
       label: "🧹 重置画布布局",
