@@ -742,13 +742,18 @@ function renderCurrentPage() {
   if (!host) return;
   S._pageSeq = S._syncSeq || 0;
   const f = S.flow;
+  const p = S.project;
   if (f.page === "canvas") return renderCanvasPage();
   let html = "";
   if (f.page === "script") html = renderScript();
   else if (f.page === "chars") html = renderChars();
-  else if (f.page === "storyboard")
-    html = f.shot ? "" : panelsPanel(); /* 过渡:真分镜页在 T5 落地 */
-  else if (f.page === "clips") html = clipsPanel();
+  else if (f.page === "storyboard") {
+    /* URL 指向不存在的 shot/scene → 回落分镜页全场景视图,不报错(spec §10) */
+    const ok =
+      f.shot &&
+      (p.shots || []).some((s) => s.idx === f.shot && s.sceneId === f.scene);
+    html = ok ? renderShotPage() : renderStoryboard();
+  } else if (f.page === "clips") html = clipsPanel();
   else if (f.page === "voice") html = voicePanel();
   else if (f.page === "film") html = renderFilm();
   else if (f.page === "cover") html = coverPanel();
@@ -901,10 +906,8 @@ function rebuildGraph(fit) {
   updateCtxbar();
 }
 
-function scenePanel(n) {
+function scenePanel(sc) {
   const p = S.project;
-  const sc = (p.scenes || []).find((s) => s.id === n.sceneId);
-  if (!sc) return '<div class="empty">场景不存在</div>';
   const list = (p.shots || [])
     .filter((s) => s.sceneId === sc.id)
     .sort((a, b) => a.idx - b.idx);
@@ -927,22 +930,56 @@ function scenePanel(n) {
     }`;
 }
 
-function panelsPanel() {
+function renderStoryboard() {
   const p = S.project;
-  return `<div class="panel-card"><h3>分镜图进度(按场景)</h3>
-    ${
-      (p.scenes || [])
-        .map((sc) => {
-          const st = sc.stats || {};
-          return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
-        <b style="flex:1">${esc(sc.title)}</b>
-        <span class="hint">图 ${st.panels || 0}/${st.shots || 0}</span>
-        <button class="btn small" data-act="goto-scene" data-scene-id="${sc.id}">去镜头 ›</button>
-      </div>`;
-        })
-        .join("") || '<div class="empty">还没有场景</div>'
-    }
-    <div class="hint" style="margin-top:10px">镜头图逐镜生成:双击「脉络」节点进入镜头图;镜头卡 pip 悬停可 ↻ 单镜重roll。</div></div>`;
+  const scenes = p.scenes || [];
+  if (!S.flow.scene || !scenes.some((s) => s.id === S.flow.scene))
+    S.flow.scene = scenes[0] ? scenes[0].id : "";
+  const cur = scenes.find((s) => s.id === S.flow.scene) || null;
+  const tabs = scenes
+    .map((sc) => {
+      const st = sc.stats || {};
+      return `<button class="sb-tab ${sc.id === S.flow.scene ? "on" : ""}" data-act="sb-tab" data-scene-id="${sc.id}">
+        <b>${esc(sc.title)}${sc.locked ? " 🔒" : ""}</b>
+        <small>图${st.panels || 0}/${st.shots || 0} · 片${st.clips || 0}/${st.shots || 0} · 音${st.voices || 0}/${st.shots || 0}</small>
+      </button>`;
+    })
+    .join("");
+  return `<div class="page-head">
+      <h2>🎞 分镜</h2>
+      <span class="hint">${scenes.length ? `共 ${scenes.length} 个场景` : ""}</span>
+    </div>
+    <div class="sb-tabs">${
+      tabs ||
+      '<span class="empty-inline">还没有场景:到「剧本」页生成分镜脚本,或在「脉络」页拆场景</span>'
+    }</div>
+    ${cur ? scenePanel(cur) : ""}`;
+}
+
+function renderShotPage() {
+  const p = S.project;
+  const sceneId = S.flow.scene;
+  const idx = S.flow.shot;
+  const sh = (p.shots || []).find(
+    (s) => s.idx === idx && s.sceneId === sceneId,
+  );
+  const sc = (p.scenes || []).find((s) => s.id === sceneId);
+  const siblings = (p.shots || [])
+    .filter((s) => s.sceneId === sceneId)
+    .map((s) => s.idx)
+    .sort((a, b) => a - b);
+  const i = siblings.indexOf(idx);
+  const prev = siblings[i - 1],
+    next = siblings[i + 1];
+  return `<div class="page-head">
+      <button class="btn small" data-act="page-back">← 返回分镜</button>
+      <h2>第 ${idx} 镜</h2>
+      <span class="hint">${esc(sc ? sc.title : sceneId)}${sc && sc.locked ? " 🔒" : ""}</span>
+      <div class="spacer"></div>
+      ${prev ? `<button class="btn small" data-act="shot-nav" data-scene-id="${sceneId}" data-idx="${prev}">← 上一镜</button>` : "<span></span>"}
+      ${next ? `<button class="btn small" data-act="shot-nav" data-scene-id="${sceneId}" data-idx="${next}">下一镜 →</button>` : ""}
+    </div>
+    <div class="shot-page">${sh ? renderShotCard(sh) : '<div class="empty">该镜头不存在</div>'}</div>`;
 }
 
 function clipsPanel() {
@@ -1022,7 +1059,7 @@ function renderShotCard(sh) {
     : sh.panelUrl
       ? `<img src="${sh.panelUrl}" loading="lazy" data-act="preview" data-kind="img" data-url="${sh.panelUrl}" data-idx="${sh.idx}" data-scene-id="${sh.sceneId}">`
       : `<div class="ph">🖼️<br><span style="font-size:12px">暂无分镜图</span></div>`;
-  return `<div class="shot">
+  return `<div class="shot" data-act="open-shot" data-scene-id="${sh.sceneId}" data-idx="${sh.idx}">
     <div class="visual-box">${media}
       <span class="badge ${sh.clipStatus === "done" ? "done" : sh.clipStatus === "animatic" ? "done" : sh.panelStatus === "error" || sh.clipStatus === "error" ? "error" : sh.panelStatus === "pending" || sh.clipStatus === "pending" ? "pending" : ""}">
         ${sh.clipStatus === "done" ? "视频 ✓" : sh.clipStatus === "animatic" ? "动态漫 ✓" : sh.clipStatus === "error" ? "视频失败" : sh.panelStatus === "done" ? "分镜图 ✓" : sh.panelStatus === "error" ? "图失败" : sh.panelStatus === "pending" || sh.clipStatus === "pending" ? "生成中…" : "待生成"}</span>
@@ -1766,7 +1803,37 @@ document.addEventListener("click", async (e) => {
       if (S.sceneId === el.dataset.sceneId) S.sceneId = "";
       render();
     } else if (act === "goto-scene") {
-      flowNav({ view: "shots", scene: el.dataset.sceneId });
+      flowNav({
+        page: "storyboard",
+        scene: el.dataset.sceneId,
+        shot: 0,
+        sel: "",
+      });
+    } else if (act === "sb-tab") {
+      flowNav({
+        page: "storyboard",
+        scene: el.dataset.sceneId,
+        shot: 0,
+        sel: "",
+      });
+    } else if (act === "page-back") {
+      flowNav({ shot: 0 });
+    } else if (act === "shot-nav") {
+      flowNav({
+        page: "storyboard",
+        scene: el.dataset.sceneId || S.flow.scene,
+        shot: Number(el.dataset.idx),
+        sel: "",
+      });
+    } else if (act === "open-shot") {
+      if (e.target.closest("input, textarea, select"))
+        return; /* 卡内编辑不打断 */
+      flowNav({
+        page: "storyboard",
+        scene: el.dataset.sceneId,
+        shot: Number(el.dataset.idx),
+        sel: "",
+      });
     } else if (act === "toggle-lock") {
       const scenes = (S.project.scenes || []).map((s) =>
         s.id === el.dataset.sceneId ? { ...s, locked: !s.locked } : s,
@@ -1866,8 +1933,6 @@ document.addEventListener("click", async (e) => {
     } else if (act === "flow-reset-layout") {
       Flow.resetLayout();
       toast("画布布局已重置", "ok");
-    } else if (act === "flow-open-story") {
-      flowNav({ page: "story" });
     } else if (act === "ctx-open") {
       const n = (S._graph.nodes || []).find((x) => x.id === S.flow.sel);
       const t = n && pageForNode(n);
