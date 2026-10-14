@@ -167,3 +167,36 @@ test("pageForNode:未知节点 → null", () => {
   assert.strictEqual(pageForNode({}), null);
   assert.strictEqual(pageForNode({ id: "mystery" }), null);
 });
+
+test("原型链硬化:继承属性名不得命中映射表", () => {
+  /* pageForNode 的 overview 查找:Object 原型属性名(toString/constructor 等)
+     不得被当成已知节点,否则返回值是继承的函数而非页面路由 */
+  assert.strictEqual(pageForNode({ id: "toString" }), null);
+  assert.strictEqual(pageForNode({ id: "constructor" }), null);
+  /* parseFlowQuery:sel=继承属性名不触发旧书签映射 */
+  assert.strictEqual(parse("sel=toString").page, "canvas");
+  /* flowRouteTo:继承属性名不算旧书签撞车,不补写 page=canvas */
+  assert.strictEqual(
+    flowRouteTo("p1", { page: "canvas", sel: "toString" }),
+    "/project/p1?sel=toString",
+  );
+});
+
+test("shot 浮点/非整数值丢弃归 0", () => {
+  assert.strictEqual(parse("page=storyboard&scene=sc1&shot=7.9").shot, 0);
+  assert.strictEqual(parse("page=storyboard&scene=sc1&shot=abc").shot, 0);
+  /* "1e3" 是合法数字且值为整数 1000,按 Number+isInteger 语义接受(裁定,非丢弃) */
+  assert.strictEqual(parse("page=storyboard&scene=sc1&shot=1e3").shot, 1000);
+  assert.strictEqual(parse("page=storyboard&scene=sc1&shot=3").shot, 3);
+});
+
+test("撞车 sel 消歧 URL 形状直断言(不只往返间接锁定)", () => {
+  assert.strictEqual(
+    flowRouteTo("p1", { page: "canvas", sel: "idea" }),
+    "/project/p1?page=canvas&sel=idea",
+  );
+  assert.strictEqual(
+    flowRouteTo("p1", { page: "canvas", sel: "shot:sc1:2" }),
+    "/project/p1?sel=shot%3Asc1%3A2",
+  );
+});

@@ -37,11 +37,11 @@
       if (q.get("overlay") === "story") page = "story";
       else {
         const sel = q.get("sel") || "";
-        if (SEL_PAGE_MAP[sel]) page = SEL_PAGE_MAP[sel];
+        if (Object.hasOwn(SEL_PAGE_MAP, sel)) page = SEL_PAGE_MAP[sel];
       }
     }
     if (!PAGES.includes(page)) page = "canvas";
-    const shot = parseInt(q.get("shot"), 10);
+    const shot = Number(q.get("shot")); /* Number 拒浮点("7.9"→7.9 非整数丢弃),parseInt 会截断成 7 */
     return {
       page,
       view: q.get("view") === "shots" ? "shots" : "overview",
@@ -60,7 +60,7 @@
     if (st.scene) q.set("scene", st.scene);
     if (st.shot) q.set("shot", String(st.shot));
     if (st.page === "canvas" && st.sel) {
-      if (SEL_PAGE_MAP[st.sel]) {
+      if (Object.hasOwn(SEL_PAGE_MAP, st.sel)) {
         /* sel 与旧书签取值撞车(idea/chars/film 等):显式补 page=canvas 消歧,
          否则刷新时会被旧书签归一误判成对应工作页(往返一致测试钉死此行为)。 */
         q.set("page", "canvas");
@@ -83,7 +83,7 @@
       cover: { page: "cover" },
       story: { page: "story" },
     };
-    if (overview[node.id]) return overview[node.id];
+    if (Object.hasOwn(overview, node.id)) return overview[node.id];
     if (node.kind === "scene" && node.sceneId) {
       return { page: "storyboard", scene: node.sceneId };
     }
