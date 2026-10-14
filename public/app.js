@@ -716,7 +716,11 @@ function railHtml(p) {
 function syncRail(p) {
   for (const r of RAIL_PAGES) {
     const dot = document.querySelector(`.rail-dot[data-light="${r.page}"]`);
-    if (dot) dot.className = "rail-dot " + railLight(r.page, p);
+    if (dot) {
+      const st = railLight(r.page, p);
+      dot.classList.remove("ok", "run", "err", "warn", "none", "pending");
+      if (st) dot.classList.add(st);
+    }
   }
   document
     .querySelectorAll("#rail .rail-item[data-page]")
@@ -937,8 +941,13 @@ function scenePanel(sc) {
 function renderStoryboard() {
   const p = S.project;
   const scenes = p.scenes || [];
-  if (!S.flow.scene || !scenes.some((s) => s.id === S.flow.scene))
+  if (!S.flow.scene || !scenes.some((s) => s.id === S.flow.scene)) {
+    const prev = S.flow.scene;
     S.flow.scene = scenes[0] ? scenes[0].id : "";
+    /* 默认选中第一个场景时回写 URL,刷新/分享保留 tab 态(终审 Minor #6) */
+    if (S.flow.scene !== prev)
+      history.replaceState({}, "", flowRouteTo(S.project.id, S.flow));
+  }
   const cur = scenes.find((s) => s.id === S.flow.scene) || null;
   const tabs = scenes
     .map((sc) => {
@@ -1842,7 +1851,6 @@ document.addEventListener("click", async (e) => {
       const scenes = (S.project.scenes || []).map((s) =>
         s.id === el.dataset.sceneId ? { ...s, locked: !s.locked } : s,
       );
-      void 0;
       const t = scenes.find((s) => s.id === el.dataset.sceneId);
       S.project = await api("/api/projects/" + S.project.id, "PUT", { scenes });
       toast(
