@@ -2297,7 +2297,7 @@ async function doHistory(act) {
 (async function init() {
   try {
     await loadAll();
-    handleRoute(); // 按当前 URL 恢复视图(支持刷新/直达/分享链接)
+    await handleRoute(); /* await:rejection 透传给 init 的 catch,失败显示在页面上而非无声白屏 */
   } catch (e) {
     app().innerHTML = `<div class="empty">服务加载失败:${esc(e.message)}<br>请确认 node server.js 正在运行。</div>`;
   }
